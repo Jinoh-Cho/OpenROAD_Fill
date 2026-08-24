@@ -45,6 +45,7 @@ class DensityFill
 
   odb::dbDatabase* db_;
   odb::PtrMap<odb::dbTechLayer, DensityFillLayerConfig> layers_;
+  bool debug_;
   std::unique_ptr<Graphics> graphics_;
   utl::Logger* logger_;
 };

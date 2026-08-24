@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <fstream>
 #include <iterator>
 #include <memory>
 #include <string>
@@ -76,6 +77,62 @@ static Polygon90 makeRect(int x_lo, int y_lo, int x_hi, int y_hi)
   return poly;
 }
 
+// Write a polygon set as an SVG made of non-overlapping rectangles.  This
+// matches the decomposition used by the debug renderer and keeps the output
+// easy to inspect in a web browser.
+static bool writeSvg(const std::string& filename,
+                     const Polygon90Set& fill_area,
+                     const Polygon90Set& non_fill,
+                     const Rect& bounds)
+{
+  std::vector<Rectangle> fill_rectangles;
+  get_rectangles(fill_rectangles, fill_area);
+
+  std::vector<Rectangle> non_fill_rectangles;
+  get_rectangles(non_fill_rectangles, non_fill);
+
+  std::ofstream svg(filename);
+  if (!svg) {
+    return false;
+  }
+
+  const int width = bounds.xMax() - bounds.xMin();
+  const int height = bounds.yMax() - bounds.yMin();
+  // SVG stroke widths are in DBU.  Use a width that remains visible when the
+  // complete fill area is fit to a browser window.
+  const int outline_width = std::max(1, std::min(width, height) / 600);
+  svg << "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"" << bounds.xMin()
+      << ' ' << bounds.yMin() << ' ' << width << ' ' << height << "\">\n";
+  svg << "  <rect x=\"" << bounds.xMin() << "\" y=\"" << bounds.yMin()
+      << "\" width=\"" << width << "\" height=\"" << height
+      << "\" fill=\"white\" stroke=\"black\"/>\n";
+  // SVG's y axis points down, unlike OpenDB's coordinate system.
+  svg << "  <g transform=\"translate(0 " << bounds.yMin() + bounds.yMax()
+      << ") scale(1 -1)\" fill=\"#4e79a7\" fill-opacity=\"0.75\" "
+         "stroke=\"#1f4e79\" vector-effect=\"non-scaling-stroke\">\n";
+  for (const auto& rect : non_fill_rectangles) {
+    svg << "    <rect x=\"" << xl(rect) << "\" y=\"" << yl(rect)
+        << "\" width=\"" << xh(rect) - xl(rect) << "\" height=\""
+        << yh(rect) - yl(rect) << "\"/>\n";
+  }
+  svg << "  </g>\n";
+
+  const std::array<const char*, 6> outline_colors
+      = {"#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#a65628"};
+  svg << "  <g transform=\"translate(0 " << bounds.yMin() + bounds.yMax()
+      << ") scale(1 -1)\" fill=\"#ffd400\" fill-opacity=\"0.55\" "
+      << "stroke-width=\"" << outline_width << "\">\n";
+  for (size_t index = 0; index < fill_rectangles.size(); index++) {
+    const auto& rect = fill_rectangles[index];
+    svg << "    <rect x=\"" << xl(rect) << "\" y=\"" << yl(rect)
+        << "\" width=\"" << xh(rect) - xl(rect) << "\" height=\""
+        << yh(rect) - yl(rect) << "\" stroke=\""
+        << outline_colors[index % outline_colors.size()] << "\"/>\n";
+  }
+  svg << "  </g>\n</svg>\n";
+  return svg.good();
+}
+
 static double getValue(pt::ptree& tree)
 {
   return boost::lexical_cast<double>(tree.data());
@@ -89,7 +146,7 @@ static double getValue(const char* key, pt::ptree& tree)
 ////////////////////////////////////////////////////////////////
 
 DensityFill::DensityFill(dbDatabase* db, utl::Logger* logger, bool debug)
-    : db_(db), logger_(logger)
+    : db_(db), debug_(debug), logger_(logger)
 {
   if (debug && Graphics::guiActive()) {
     graphics_ = std::make_unique<Graphics>();
@@ -456,6 +513,17 @@ void DensityFill::fillLayer(dbBlock* block,
   // Do non-OPC fill
   Polygon90Set fill_area
       = fill_bounds - (non_fill + cfg.non_opc.space_to_non_fill);
+
+  if (debug_) {
+    const std::string filename
+        = std::string("fill_area_") + layer->getConstName() + "_non_opc.svg";
+    if (writeSvg(filename, fill_area, non_fill, fill_bounds_rect)) {
+      logger_->info(FIN, 9, "Wrote non-OPC fill area to {}.", filename);
+    } else {
+      logger_->warn(
+          FIN, 11, "Unable to write non-OPC fill area to {}.", filename);
+    }
+  }
 
   if (graphics_) {
     graphics_->status("Non-OPC Area");
