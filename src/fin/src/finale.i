@@ -26,5 +26,16 @@ density_fill_cmd(const char* rules_filename,
   finale->densityFill(rules_filename, fill_area);
 }
 
-%} // inline
+void
+density_fill_rectangle_extraction_benchmark_cmd(const char* rules_filename,
+                                                 const odb::Rect& fill_area,
+                                                 int left_copies,
+                                                 int right_copies,
+                                                 int runs)
+{
+  auto *finale = ord::OpenRoad::openRoad()->getFinale();
+  finale->benchmarkRectangleExtraction(
+      rules_filename, fill_area, left_copies, right_copies, runs);
+}
 
+%} // inline

@@ -21,6 +21,7 @@
 #include "odb/geom.h"
 #include "polygon.h"
 #include "utl/Logger.h"
+#include "utl/timer.h"
 
 namespace fin {
 
@@ -577,6 +578,82 @@ void DensityFill::fillLayer(dbBlock* block,
     graphics_->status("OPC Area");
     graphics_->drawPolygon90Set(opc_fill_area);
   }
+}
+
+void DensityFill::benchmarkRectangleExtraction(const char* cfg_filename,
+                                               const Rect& fill_bounds_rect,
+                                               int left_copies,
+                                               int right_copies,
+                                               int runs)
+{
+  loadConfig(cfg_filename, db_->getTech());
+  dbBlock* block = db_->getChip()->getBlock();
+  const int tile_width = fill_bounds_rect.xMax() - fill_bounds_rect.xMin();
+  const Rect scaled_fill_bounds(
+      fill_bounds_rect.xMin() - left_copies * tile_width,
+      fill_bounds_rect.yMin(),
+      fill_bounds_rect.xMax() + right_copies * tile_width,
+      fill_bounds_rect.yMax());
+  const int copies = left_copies + right_copies + 1;
+  std::vector<Polygon90Set> fill_areas;
+
+  for (auto* layer : db_->getTech()->getLayers()) {
+    auto layer_config = layers_.find(layer);
+    if (layer_config == layers_.end()) {
+      continue;
+    }
+
+    // Collect the same instance, wire, and via geometry used by fill().  The
+    // benchmark tiles its unioned geometry because object identity is not used
+    // by the rectangle extraction being measured.
+    Polygon90Set source_non_fill = orNonFills(block, layer);
+    std::vector<Rectangle> source_rectangles;
+    get_rectangles(source_rectangles, source_non_fill);
+
+    Polygon90Set non_fill;
+    for (int copy = -left_copies; copy <= right_copies; copy++) {
+      const int x_offset = copy * tile_width;
+      for (const auto& rectangle : source_rectangles) {
+        non_fill.insert(makeRect(xl(rectangle) + x_offset,
+                                 yl(rectangle),
+                                 xh(rectangle) + x_offset,
+                                 yh(rectangle)));
+      }
+    }
+
+    const auto& cfg = layer_config->second;
+    const auto fill_bounds = makeRect(scaled_fill_bounds.xMin(),
+                                      scaled_fill_bounds.yMin(),
+                                      scaled_fill_bounds.xMax(),
+                                      scaled_fill_bounds.yMax());
+    Polygon90Set fill_area
+        = fill_bounds - (non_fill + cfg.non_opc.space_to_non_fill);
+    fill_areas.push_back(std::move(fill_area));
+  }
+
+  double total_seconds = 0.0;
+  size_t rectangle_count = 0;
+  for (int run = 0; run < runs; run++) {
+    utl::Timer extraction_timer;
+    size_t run_rectangle_count = 0;
+    for (const auto& fill_area : fill_areas) {
+      std::vector<Rectangle> fill_rectangles;
+      get_rectangles(fill_rectangles, fill_area);
+      run_rectangle_count += fill_rectangles.size();
+    }
+    total_seconds += extraction_timer.elapsed();
+    rectangle_count = run_rectangle_count;
+  }
+
+  logger_->info(FIN,
+                12,
+                "Fill-area extraction: layers={}, copies={}, runs={}, "
+                "rectangles={}, average_seconds={:.6f}.",
+                fill_areas.size(),
+                copies,
+                runs,
+                rectangle_count,
+                total_seconds / runs);
 }
 
 // Fill the design according to the given cfg file

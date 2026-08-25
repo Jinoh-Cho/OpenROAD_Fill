@@ -28,4 +28,15 @@ void Finale::densityFill(const char* rules_filename, const odb::Rect& fill_area)
   filler.fill(rules_filename, fill_area);
 }
 
+void Finale::benchmarkRectangleExtraction(const char* rules_filename,
+                                          const odb::Rect& fill_area,
+                                          int left_copies,
+                                          int right_copies,
+                                          int runs)
+{
+  DensityFill filler(db_, logger_, debug_);
+  filler.benchmarkRectangleExtraction(
+      rules_filename, fill_area, left_copies, right_copies, runs);
+}
+
 }  // namespace fin

@@ -11,7 +11,14 @@ COMPULSORY_TESTS = [
     "gcd_fill",
 ]
 
-ALL_TESTS = COMPULSORY_TESTS
+# From CMakeLists.txt or_integration_tests(PASSFAIL_TESTS
+# Rectangle extraction timings are intentionally nondeterministic.  The test
+# only verifies that the experimental command completes successfully.
+PASSFAIL_TESTS = [
+    "gcd_fill_rectangle_benchmark",
+]
+
+ALL_TESTS = COMPULSORY_TESTS + PASSFAIL_TESTS
 
 filegroup(
     name = "regression_resources",
@@ -56,8 +63,10 @@ filegroup(
 [
     regression_test(
         name = test_name,
+        check_log = False if test_name in PASSFAIL_TESTS else True,
+        check_passfail = True if test_name in PASSFAIL_TESTS else False,
         data = [":" + test_name + "_resources"],
-        tags = [] if test_name in COMPULSORY_TESTS else ["manual"],
+        tags = [],
         visibility = ["//visibility:public"],
     )
     for test_name in ALL_TESTS

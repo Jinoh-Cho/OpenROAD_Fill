@@ -34,6 +34,11 @@ class DensityFill
   DensityFill& operator=(const DensityFill&&) = delete;
 
   void fill(const char* cfg_filename, const odb::Rect& fill_area);
+  void benchmarkRectangleExtraction(const char* cfg_filename,
+                                    const odb::Rect& fill_area,
+                                    int left_copies,
+                                    int right_copies,
+                                    int runs);
 
  private:
   void loadConfig(const char* cfg_filename, odb::dbTech* tech);

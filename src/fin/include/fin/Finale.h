@@ -17,6 +17,11 @@ class Finale
   Finale(odb::dbDatabase* db, utl::Logger* logger);
 
   void densityFill(const char* rules_filename, const odb::Rect& fill_area);
+  void benchmarkRectangleExtraction(const char* rules_filename,
+                                    const odb::Rect& fill_area,
+                                    int left_copies,
+                                    int right_copies,
+                                    int runs);
 
   void setDebug();
 
