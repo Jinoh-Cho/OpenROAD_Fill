@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Measure fill-area rectangle extraction at multiple horizontal copy counts.
+# Measure fill-area rectangle extraction using near-square copy grids.
 # Usage: ./run_fin_rectangle_scaling.sh [runs_per_scale]
 
 set -euo pipefail
@@ -34,13 +34,24 @@ bazelisk --output_user_root="$bazel_root" \
   build --jobs="$(nproc)" //:openroad
 
 for copies in "${copy_counts[@]}"; do
-  right_copies=$((copies - 1))
-  echo "===== FIN rectangle extraction: copies=${copies}, runs=${runs} ====="
+  columns=1
+  while (((columns + 1) * (columns + 1) <= copies)); do
+    ((columns += 1))
+  done
+  while ((copies % columns != 0)); do
+    ((columns -= 1))
+  done
+  rows=$((copies / columns))
+  right_copies=$((columns - 1))
+  top_copies=$((rows - 1))
+  echo "===== FIN rectangle extraction: copies=${copies} (${columns}x${rows}), runs=${runs} ====="
 
   (
     cd "$repo_root/src/fin/test"
     FIN_BENCH_LEFT=0 \
     FIN_BENCH_RIGHT="$right_copies" \
+    FIN_BENCH_BOTTOM=0 \
+    FIN_BENCH_TOP="$top_copies" \
     FIN_BENCH_RUNS="$runs" \
       "$repo_root/bazel-bin/openroad" \
         -no_splash -no_init -exit gcd_fill_rectangle_benchmark.tcl

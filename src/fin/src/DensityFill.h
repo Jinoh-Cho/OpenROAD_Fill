@@ -38,7 +38,15 @@ class DensityFill
                                     const odb::Rect& fill_area,
                                     int left_copies,
                                     int right_copies,
+                                    int bottom_copies,
+                                    int top_copies,
                                     int runs);
+  double tileGridMetalArea(const char* cfg_filename,
+                           const odb::Rect& region,
+                           const odb::Point& origin,
+                           int window_size,
+                           int resolution,
+                           const char* svg_filename);
 
  private:
   void loadConfig(const char* cfg_filename, odb::dbTech* tech);

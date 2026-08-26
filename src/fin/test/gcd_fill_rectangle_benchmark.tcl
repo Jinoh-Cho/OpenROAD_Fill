@@ -8,6 +8,8 @@ read_def gcd_prefill.def
 # The command only measures get_rectangles() after all setup is complete.
 set left_copies 0
 set right_copies 0
+set bottom_copies 0
+set top_copies 1
 set benchmark_runs 1
 
 if { [info exists ::env(FIN_BENCH_LEFT)] } {
@@ -16,6 +18,12 @@ if { [info exists ::env(FIN_BENCH_LEFT)] } {
 if { [info exists ::env(FIN_BENCH_RIGHT)] } {
   set right_copies $::env(FIN_BENCH_RIGHT)
 }
+if { [info exists ::env(FIN_BENCH_BOTTOM)] } {
+  set bottom_copies $::env(FIN_BENCH_BOTTOM)
+}
+if { [info exists ::env(FIN_BENCH_TOP)] } {
+  set top_copies $::env(FIN_BENCH_TOP)
+}
 if { [info exists ::env(FIN_BENCH_RUNS)] } {
   set benchmark_runs $::env(FIN_BENCH_RUNS)
 }
@@ -23,6 +31,8 @@ density_fill_rectangle_extraction_benchmark \
   -rules fill.json \
   -left $left_copies \
   -right $right_copies \
+  -bottom $bottom_copies \
+  -top $top_copies \
   -runs $benchmark_runs
 
 puts "pass"

@@ -37,11 +37,11 @@ proc density_fill { args } {
 }
 
 sta::define_cmd_args "density_fill_rectangle_extraction_benchmark" \
-  {[-rules rules_file] [-area {lx ly ux uy}] [-left copies] [-right copies] [-runs runs]}
+  {[-rules rules_file] [-area {lx ly ux uy}] [-left copies] [-right copies] [-bottom copies] [-top copies] [-runs runs]}
 
 proc density_fill_rectangle_extraction_benchmark { args } {
   sta::parse_key_args "density_fill_rectangle_extraction_benchmark" args \
-    keys {-rules -area -left -right -runs} flags {}
+    keys {-rules -area -left -right -bottom -top -runs} flags {}
 
   if { ![info exists keys(-rules)] } {
     utl::error FIN 13 "The -rules argument must be specified."
@@ -60,7 +60,7 @@ proc density_fill_rectangle_extraction_benchmark { args } {
     set fill_area [ord::get_db_core]
   }
 
-  foreach {option value} {-left 0 -right 0 -runs 1} {
+  foreach {option value} {-left 0 -right 0 -bottom 0 -top 0 -runs 1} {
     if { [info exists keys($option)] } {
       set value $keys($option)
     }
@@ -74,5 +74,35 @@ proc density_fill_rectangle_extraction_benchmark { args } {
   }
 
   fin::density_fill_rectangle_extraction_benchmark_cmd \
-    $rules_file $fill_area $left $right $runs
+    $rules_file $fill_area $left $right $bottom $top $runs
+}
+
+sta::define_cmd_args "tile_grid_metal_area" \
+  {[-rules rules_file] [-area {lx ly ux uy}] -window window_size [-origin {x y}] [-resolution resolution] [-svg file]}
+
+proc tile_grid_metal_area { args } {
+  sta::parse_key_args "tile_grid_metal_area" args \
+    keys {-rules -area -window -origin -resolution -svg} flags {}
+  if { ![info exists keys(-rules)] || ![info exists keys(-window)] } {
+    utl::error FIN 18 "The -rules and -window arguments must be specified."
+  }
+  set region [ord::get_db_core]
+  if { [info exists keys(-area)] } {
+    lassign $keys(-area) lx ly ux uy
+    set region [odb::Rect x [ord::microns_to_dbu $lx] [ord::microns_to_dbu $ly] \
+                           [ord::microns_to_dbu $ux] [ord::microns_to_dbu $uy]]
+  }
+  set origin {0 0}
+  if { [info exists keys(-origin)] } { set origin $keys(-origin) }
+  lassign $origin ox oy
+  # Interpret -origin as an offset from the lower-left corner of the region.
+  set origin_x [expr {[$region xMin] + [ord::microns_to_dbu $ox]}]
+  set origin_y [expr {[$region yMin] + [ord::microns_to_dbu $oy]}]
+  set resolution 4
+  if { [info exists keys(-resolution)] } { set resolution $keys(-resolution) }
+  set svg_file ""
+  if { [info exists keys(-svg)] } { set svg_file $keys(-svg) }
+  return [fin::tile_grid_metal_area_cmd $keys(-rules) $region \
+    [odb::Point x $origin_x $origin_y] \
+    [ord::microns_to_dbu $keys(-window)] $resolution $svg_file]
 }

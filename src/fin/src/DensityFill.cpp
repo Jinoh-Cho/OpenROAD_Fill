@@ -14,6 +14,7 @@
 
 #include "boost/lexical_cast.hpp"
 #include "boost/polygon/polygon.hpp"
+#include "fin/TileGrid.h"
 #include "graphics.h"
 #include "odb/db.h"
 #include "odb/dbShape.h"
@@ -584,17 +585,22 @@ void DensityFill::benchmarkRectangleExtraction(const char* cfg_filename,
                                                const Rect& fill_bounds_rect,
                                                int left_copies,
                                                int right_copies,
+                                               int bottom_copies,
+                                               int top_copies,
                                                int runs)
 {
   loadConfig(cfg_filename, db_->getTech());
   dbBlock* block = db_->getChip()->getBlock();
   const int tile_width = fill_bounds_rect.xMax() - fill_bounds_rect.xMin();
+  const int tile_height = fill_bounds_rect.yMax() - fill_bounds_rect.yMin();
   const Rect scaled_fill_bounds(
       fill_bounds_rect.xMin() - left_copies * tile_width,
-      fill_bounds_rect.yMin(),
+      fill_bounds_rect.yMin() - bottom_copies * tile_height,
       fill_bounds_rect.xMax() + right_copies * tile_width,
-      fill_bounds_rect.yMax());
-  const int copies = left_copies + right_copies + 1;
+      fill_bounds_rect.yMax() + top_copies * tile_height);
+  const int horizontal_copies = left_copies + right_copies + 1;
+  const int vertical_copies = bottom_copies + top_copies + 1;
+  const int copies = horizontal_copies * vertical_copies;
   std::vector<Polygon90Set> fill_areas;
 
   for (auto* layer : db_->getTech()->getLayers()) {
@@ -611,13 +617,16 @@ void DensityFill::benchmarkRectangleExtraction(const char* cfg_filename,
     get_rectangles(source_rectangles, source_non_fill);
 
     Polygon90Set non_fill;
-    for (int copy = -left_copies; copy <= right_copies; copy++) {
-      const int x_offset = copy * tile_width;
-      for (const auto& rectangle : source_rectangles) {
-        non_fill.insert(makeRect(xl(rectangle) + x_offset,
-                                 yl(rectangle),
-                                 xh(rectangle) + x_offset,
-                                 yh(rectangle)));
+    for (int row = -bottom_copies; row <= top_copies; row++) {
+      const int y_offset = row * tile_height;
+      for (int column = -left_copies; column <= right_copies; column++) {
+        const int x_offset = column * tile_width;
+        for (const auto& rectangle : source_rectangles) {
+          non_fill.insert(makeRect(xl(rectangle) + x_offset,
+                                   yl(rectangle) + y_offset,
+                                   xh(rectangle) + x_offset,
+                                   yh(rectangle) + y_offset));
+        }
       }
     }
 
@@ -647,13 +656,51 @@ void DensityFill::benchmarkRectangleExtraction(const char* cfg_filename,
 
   logger_->info(FIN,
                 12,
-                "Fill-area extraction: layers={}, copies={}, runs={}, "
+                "Fill-area extraction: layers={}, copies={} ({}x{}), runs={}, "
                 "rectangles={}, average_seconds={:.6f}.",
                 fill_areas.size(),
                 copies,
+                horizontal_copies,
+                vertical_copies,
                 runs,
                 rectangle_count,
                 total_seconds / runs);
+}
+
+double DensityFill::tileGridMetalArea(const char* cfg_filename,
+                                      const Rect& region,
+                                      const odb::Point& origin,
+                                      int window_size,
+                                      int resolution,
+                                      const char* svg_filename)
+{
+  loadConfig(cfg_filename, db_->getTech());
+  dbBlock* block = db_->getChip()->getBlock();
+  double total_area = 0.0;
+  TileGrid grid({region, origin, window_size, resolution});
+
+  for (auto* layer : db_->getTech()->getLayers()) {
+    if (layers_.find(layer) == layers_.end()) {
+      continue;
+    }
+    Polygon90Set layer_shapes = orNonFills(block, layer);
+    grid.calculateMetalDensities(layer_shapes);
+    const double layer_area = grid.totalMetalArea();
+    logger_->info(FIN,
+                  17,
+                  "Tile grid: layer={}, tiles={}, metal_area={:.0f} DBU^2.",
+                  layer->getConstName(),
+                  grid.tiles().size(),
+                  layer_area);
+    total_area += layer_area;
+    if (svg_filename && svg_filename[0] != '\0') {
+      const std::string layer_svg
+          = std::string(svg_filename) + "_" + layer->getConstName() + ".svg";
+      grid.writeSvg(
+          layer_svg, layer_shapes, db_->getTech()->getDbUnitsPerMicron());
+    }
+  }
+  return total_area;
 }
 
 // Fill the design according to the given cfg file

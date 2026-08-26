@@ -19,6 +19,7 @@ cc_library(
         "src/DensityFill.h",
         "src/Finale.cpp",
         "src/MakeFinale.cpp",
+        "src/TileGrid.cpp",
         "src/graphics.cpp",
         "src/graphics.h",
         "src/polygon.h",
@@ -28,6 +29,7 @@ cc_library(
     hdrs = [
         "include/fin/Finale.h",
         "include/fin/MakeFinale.h",
+        "include/fin/TileGrid.h",
     ],
     includes = [
         "include",

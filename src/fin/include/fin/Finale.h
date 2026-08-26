@@ -21,7 +21,15 @@ class Finale
                                     const odb::Rect& fill_area,
                                     int left_copies,
                                     int right_copies,
+                                    int bottom_copies,
+                                    int top_copies,
                                     int runs);
+  double tileGridMetalArea(const char* rules_filename,
+                           const odb::Rect& region,
+                           const odb::Point& origin,
+                           int window_size,
+                           int resolution,
+                           const char* svg_filename);
 
   void setDebug();
 

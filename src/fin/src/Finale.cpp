@@ -32,11 +32,30 @@ void Finale::benchmarkRectangleExtraction(const char* rules_filename,
                                           const odb::Rect& fill_area,
                                           int left_copies,
                                           int right_copies,
+                                          int bottom_copies,
+                                          int top_copies,
                                           int runs)
 {
   DensityFill filler(db_, logger_, debug_);
-  filler.benchmarkRectangleExtraction(
-      rules_filename, fill_area, left_copies, right_copies, runs);
+  filler.benchmarkRectangleExtraction(rules_filename,
+                                      fill_area,
+                                      left_copies,
+                                      right_copies,
+                                      bottom_copies,
+                                      top_copies,
+                                      runs);
+}
+
+double Finale::tileGridMetalArea(const char* rules_filename,
+                                 const odb::Rect& region,
+                                 const odb::Point& origin,
+                                 int window_size,
+                                 int resolution,
+                                 const char* svg_filename)
+{
+  DensityFill filler(db_, logger_, debug_);
+  return filler.tileGridMetalArea(
+      rules_filename, region, origin, window_size, resolution, svg_filename);
 }
 
 }  // namespace fin
