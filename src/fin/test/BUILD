@@ -17,6 +17,7 @@ COMPULSORY_TESTS = [
 PASSFAIL_TESTS = [
     "gcd_fill_rectangle_benchmark",
     "gcd_tile_grid_density",
+    "min_var_fill",
 ]
 
 ALL_TESTS = COMPULSORY_TESTS + PASSFAIL_TESTS

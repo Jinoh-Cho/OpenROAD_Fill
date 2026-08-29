@@ -14,6 +14,9 @@ target_sources(fin
     src/Finale.cpp
     src/MakeFinale.cpp
     src/DensityFill.cpp
+    src/FillConfig.cpp
+    src/FillGeometry.cpp
+    src/MinVarFill.cpp
     src/TileGrid.cpp
     src/graphics.cpp
 )

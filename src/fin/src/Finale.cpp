@@ -4,6 +4,7 @@
 #include "fin/Finale.h"
 
 #include "DensityFill.h"
+#include "MinVarFill.h"
 #include "odb/db.h"
 #include "odb/geom.h"
 #include "utl/Logger.h"
@@ -22,9 +23,20 @@ void Finale::setDebug()
   debug_ = true;
 }
 
+void Finale::setMinVarDebug()
+{
+  min_var_debug_ = true;
+}
+
 void Finale::densityFill(const char* rules_filename, const odb::Rect& fill_area)
 {
   DensityFill filler(db_, logger_, debug_);
+  filler.fill(rules_filename, fill_area);
+}
+
+void Finale::minVarFill(const char* rules_filename, const odb::Rect& fill_area)
+{
+  MinVarFill filler(db_, logger_, min_var_debug_);
   filler.fill(rules_filename, fill_area);
 }
 
@@ -36,7 +48,7 @@ void Finale::benchmarkRectangleExtraction(const char* rules_filename,
                                           int top_copies,
                                           int runs)
 {
-  DensityFill filler(db_, logger_, debug_);
+  MinVarFill filler(db_, logger_);
   filler.benchmarkRectangleExtraction(rules_filename,
                                       fill_area,
                                       left_copies,
@@ -53,7 +65,7 @@ double Finale::tileGridMetalArea(const char* rules_filename,
                                  int resolution,
                                  const char* svg_filename)
 {
-  DensityFill filler(db_, logger_, debug_);
+  MinVarFill filler(db_, logger_);
   return filler.tileGridMetalArea(
       rules_filename, region, origin, window_size, resolution, svg_filename);
 }

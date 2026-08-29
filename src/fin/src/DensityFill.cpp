@@ -4,17 +4,14 @@
 #include "DensityFill.h"
 
 #include <algorithm>
-#include <array>
-#include <fstream>
 #include <iterator>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "boost/lexical_cast.hpp"
+#include "FillGeometry.h"
 #include "boost/polygon/polygon.hpp"
-#include "fin/TileGrid.h"
 #include "graphics.h"
 #include "odb/db.h"
 #include "odb/dbShape.h"
@@ -22,133 +19,24 @@
 #include "odb/geom.h"
 #include "polygon.h"
 #include "utl/Logger.h"
-#include "utl/timer.h"
 
 namespace fin {
 
 using utl::FIN;
 
-namespace pt = boost::property_tree;
-
 using odb::dbBlock;
 using odb::dbChip;
 using odb::dbDatabase;
 using odb::dbFill;
-using odb::dbInstShapeItr;
-using odb::dbShape;
 using odb::dbTech;
 using odb::dbTechLayer;
 using odb::dbTechLayerDir;
-using odb::dbTechVia;
-using odb::dbVia;
-using odb::dbWire;
-using odb::dbWireShapeItr;
 using odb::Rect;
-
-// The rules for OPC or non-OPC shapes on a layer from the JSON config
-struct DensityFillShapesConfig
-{
-  // width & height of fill shapes to try (in order)
-  std::vector<std::pair<int, int>> shapes;
-  int space_to_fill;
-  int space_to_non_fill;
-  int space_line_end;
-};
-
-// The rules for a layer from the JSON config
-struct DensityFillLayerConfig
-{
-  int space_to_outline;
-  int num_masks;
-  int opc_halo;
-  bool has_opc;
-
-  DensityFillShapesConfig opc;
-  DensityFillShapesConfig non_opc;
-};
-
-// Make a boost polygon representing a rectangle
-static Polygon90 makeRect(int x_lo, int y_lo, int x_hi, int y_hi)
-{
-  using Pt = Polygon90::point_type;
-  std::array<Pt, 4> pts
-      = {Pt(x_lo, y_lo), Pt(x_hi, y_lo), Pt(x_hi, y_hi), Pt(x_lo, y_hi)};
-
-  Polygon90 poly;
-  poly.set(pts.begin(), pts.end());
-  return poly;
-}
-
-// Write a polygon set as an SVG made of non-overlapping rectangles.  This
-// matches the decomposition used by the debug renderer and keeps the output
-// easy to inspect in a web browser.
-static bool writeSvg(const std::string& filename,
-                     const Polygon90Set& fill_area,
-                     const Polygon90Set& non_fill,
-                     const Rect& bounds)
-{
-  std::vector<Rectangle> fill_rectangles;
-  get_rectangles(fill_rectangles, fill_area);
-
-  std::vector<Rectangle> non_fill_rectangles;
-  get_rectangles(non_fill_rectangles, non_fill);
-
-  std::ofstream svg(filename);
-  if (!svg) {
-    return false;
-  }
-
-  const int width = bounds.xMax() - bounds.xMin();
-  const int height = bounds.yMax() - bounds.yMin();
-  // SVG stroke widths are in DBU.  Use a width that remains visible when the
-  // complete fill area is fit to a browser window.
-  const int outline_width = std::max(1, std::min(width, height) / 600);
-  svg << "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"" << bounds.xMin()
-      << ' ' << bounds.yMin() << ' ' << width << ' ' << height << "\">\n";
-  svg << "  <rect x=\"" << bounds.xMin() << "\" y=\"" << bounds.yMin()
-      << "\" width=\"" << width << "\" height=\"" << height
-      << "\" fill=\"white\" stroke=\"black\"/>\n";
-  // SVG's y axis points down, unlike OpenDB's coordinate system.
-  svg << "  <g transform=\"translate(0 " << bounds.yMin() + bounds.yMax()
-      << ") scale(1 -1)\" fill=\"#4e79a7\" fill-opacity=\"0.75\" "
-         "stroke=\"#1f4e79\" vector-effect=\"non-scaling-stroke\">\n";
-  for (const auto& rect : non_fill_rectangles) {
-    svg << "    <rect x=\"" << xl(rect) << "\" y=\"" << yl(rect)
-        << "\" width=\"" << xh(rect) - xl(rect) << "\" height=\""
-        << yh(rect) - yl(rect) << "\"/>\n";
-  }
-  svg << "  </g>\n";
-
-  const std::array<const char*, 6> outline_colors
-      = {"#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#a65628"};
-  svg << "  <g transform=\"translate(0 " << bounds.yMin() + bounds.yMax()
-      << ") scale(1 -1)\" fill=\"#ffd400\" fill-opacity=\"0.55\" "
-      << "stroke-width=\"" << outline_width << "\">\n";
-  for (size_t index = 0; index < fill_rectangles.size(); index++) {
-    const auto& rect = fill_rectangles[index];
-    svg << "    <rect x=\"" << xl(rect) << "\" y=\"" << yl(rect)
-        << "\" width=\"" << xh(rect) - xl(rect) << "\" height=\""
-        << yh(rect) - yl(rect) << "\" stroke=\""
-        << outline_colors[index % outline_colors.size()] << "\"/>\n";
-  }
-  svg << "  </g>\n</svg>\n";
-  return svg.good();
-}
-
-static double getValue(pt::ptree& tree)
-{
-  return boost::lexical_cast<double>(tree.data());
-}
-
-static double getValue(const char* key, pt::ptree& tree)
-{
-  return getValue(tree.get_child(key));
-}
 
 ////////////////////////////////////////////////////////////////
 
 DensityFill::DensityFill(dbDatabase* db, utl::Logger* logger, bool debug)
-    : db_(db), debug_(debug), logger_(logger)
+    : db_(db), logger_(logger)
 {
   if (debug && Graphics::guiActive()) {
     graphics_ = std::make_unique<Graphics>();
@@ -158,207 +46,8 @@ DensityFill::DensityFill(dbDatabase* db, utl::Logger* logger, bool debug)
 // must be in the .cpp due to forward decl
 DensityFill::~DensityFill() = default;
 
-// Converts the user's JSON configuration file in per layer
-// DensityFillLayerConfig objects.
-//
-// In the configuration you can group layers together that have
-// similar rules.  This method expands such groupings into per layer
-// values.  It also translates from microns to DBU and layer names
-// to dbTechLayer*.
-void DensityFill::readAndExpandLayers(dbTech* tech, pt::ptree& tree)
-{
-  int dbu = tech->getDbUnitsPerMicron();
-
-  auto& layers = tree.get_child("layers");
-  for (auto& [name, layer] : layers) {
-    DensityFillLayerConfig cfg;
-    cfg.space_to_outline = getValue("space_to_outline", layer) * dbu;
-
-    // non-OPC data
-    {
-      auto& non_opc = layer.get_child("non-opc");
-      auto& scfg = cfg.non_opc;
-      scfg.space_to_fill = getValue("space_to_fill", non_opc) * dbu;
-      scfg.space_to_non_fill = getValue("space_to_non_fill", non_opc) * dbu;
-      scfg.space_line_end = 0;  // n/a for non-OPC
-      cfg.num_masks = non_opc.get_child("datatype").size();
-
-      auto widths = non_opc.get_child("width");
-      auto heights = non_opc.get_child("height");
-
-      std::ranges::transform(widths,
-                             heights,
-                             std::back_inserter(scfg.shapes),
-                             [dbu](auto& w, auto& h) {
-                               return std::make_pair(getValue(w.second) * dbu,
-                                                     getValue(h.second) * dbu);
-                             });
-    }
-
-    // OPC data, if any
-    auto opc_it = layer.find("opc");
-    cfg.has_opc = opc_it != layer.not_found();
-    if (cfg.has_opc) {
-      auto& opc = layer.get_child("opc");
-      auto& scfg = cfg.opc;
-      cfg.opc_halo = getValue("halo", opc) * dbu;
-      scfg.space_to_fill = getValue("space_to_fill", opc) * dbu;
-      scfg.space_to_non_fill = getValue("space_to_non_fill", opc) * dbu;
-      if (opc.find("space_line_end") != opc.not_found()) {
-        scfg.space_line_end = getValue("space_line_end", opc) * dbu;
-      } else {
-        scfg.space_line_end = 0;
-      }
-
-      auto widths = opc.get_child("width");
-      auto heights = opc.get_child("height");
-
-      std::ranges::transform(widths,
-                             heights,
-                             std::back_inserter(scfg.shapes),
-                             [dbu](auto& w, auto& h) {
-                               return std::make_pair(getValue(w.second) * dbu,
-                                                     getValue(h.second) * dbu);
-                             });
-    }
-
-    auto it = layer.find("names");
-    if (it != layer.not_found()) {
-      // Expand names
-      for (auto& [name, layer_name] : layer.get_child("names")) {
-        auto tech_layer = tech->findLayer(layer_name.data().c_str());
-        if (!tech_layer) {
-          logger_->error(FIN,
-                         1,
-                         "Layer {} in names was not found.",
-                         layer.get_child("name").data());
-        }
-        layers_[tech_layer] = cfg;
-      }
-    } else {
-      // No expansion, just a single layer
-      auto tech_layer = tech->findLayer(layer.get_child("name").data().c_str());
-      if (!tech_layer) {
-        logger_->error(
-            FIN, 2, "Layer {} not found.", layer.get_child("name").data());
-      }
-      layers_[tech_layer] = std::move(cfg);
-    }
-  }
-}
-
-void DensityFill::loadConfig(const char* cfg_filename, dbTech* tech)
-{
-  // Read the json config file using Boost's property_tree
-  pt::ptree tree;
-  pt::json_parser::read_json(cfg_filename, tree);
-  readAndExpandLayers(tech, tree);
-}
-
-// Insert into polygon_set any part of given shape on the given layer (shape may
-// be a via)
-static void insertShape(const dbShape& shape,
-                        Polygon90Set& polygon_set,
-                        dbTechLayer* layer)
-{
-  auto type = shape.getType();
-  switch (type) {
-    case dbShape::VIA:
-    case dbShape::TECH_VIA: {
-      dbTechLayer* top;
-      dbTechLayer* bottom;
-      if (type == dbShape::VIA) {
-        dbVia* via = shape.getVia();
-        top = via->getTopLayer();
-        bottom = via->getBottomLayer();
-      } else {
-        dbTechVia* via = shape.getTechVia();
-        top = via->getTopLayer();
-        bottom = via->getBottomLayer();
-      }
-
-      if (top != layer && bottom != layer) {
-        return;
-      }
-      std::vector<dbShape> boxes;
-      dbShape::getViaBoxes(shape, boxes);
-      for (auto& box : boxes) {
-        if (box.getTechLayer() == layer) {
-          polygon_set.insert(
-              makeRect(box.xMin(), box.yMin(), box.xMax(), box.yMax()));
-        }
-      }
-      break;
-    }
-    case dbShape::SEGMENT:
-      if (shape.getTechLayer() == layer) {
-        polygon_set.insert(
-            makeRect(shape.xMin(), shape.yMin(), shape.xMax(), shape.yMax()));
-      }
-      break;
-    case dbShape::TECH_VIA_BOX:
-    case dbShape::VIA_BOX:
-      if (shape.getTechLayer() == layer) {
-        polygon_set.insert(
-            makeRect(shape.xMin(), shape.yMin(), shape.xMax(), shape.yMax()));
-      }
-      break;
-  }
-}
-
-// Build a polygon set out of all the non-fill shape on the given layer
-// including wires, special wires, and instances' pins & OBS
-static Polygon90Set orNonFills(dbBlock* block, dbTechLayer* layer)
-{
-  Polygon90Set non_fill;  // The result
-  dbShape shape;          // Shared temp
-
-  // Get shapes from regular wires
-  dbWireShapeItr shapes;
-  for (auto net : block->getNets()) {
-    dbWire* wire = net->getWire();
-    if (!wire) {
-      continue;
-    }
-    for (shapes.begin(wire); shapes.next(shape);) {
-      insertShape(shape, non_fill, layer);
-    }
-  }
-
-  // Get shapes from special wires
-  std::vector<dbShape> via_shapes;
-  for (auto net : block->getNets()) {
-    for (auto swire : net->getSWires()) {
-      for (auto sbox : swire->getWires()) {
-        if (sbox->isVia()) {
-          dbVia* via = sbox->getBlockVia();
-          Rect rect = sbox->getBox();
-          shape.setVia(via, rect);
-          dbShape::getViaBoxes(shape, via_shapes);
-          for (auto& via_shape : via_shapes) {
-            insertShape(via_shape, non_fill, layer);
-          }
-        } else if (sbox->getTechLayer() == layer) {
-          non_fill.insert(
-              makeRect(sbox->xMin(), sbox->yMin(), sbox->xMax(), sbox->yMax()));
-        }
-      }
-    }
-  }
-
-  // Get shapes from instances
-  dbInstShapeItr insts(/* expand_vias */ false);
-  for (auto inst : block->getInsts()) {
-    for (insts.begin(inst, dbInstShapeItr::ALL); insts.next(shape);) {
-      insertShape(shape, non_fill, layer);
-    }
-  }
-
-  return non_fill;
-}
-
 static std::pair<int, int> getSpacing(dbTechLayer* layer,
-                                      const DensityFillShapesConfig& cfg)
+                                      const FillShapesConfig& cfg)
 {
   bool is_horiz = layer->getDirection() == dbTechLayerDir::HORIZONTAL;
   int space_x = cfg.space_to_fill;
@@ -380,7 +69,7 @@ static std::pair<int, int> getSpacing(dbTechLayer* layer,
 // polygon is filled.
 static void prune(Polygon90Set& fill_area,
                   dbTechLayer* layer,
-                  const DensityFillShapesConfig& cfg,
+                  const FillShapesConfig& cfg,
                   Graphics* graphics)
 {
   auto [space_x, space_y] = getSpacing(layer, cfg);
@@ -399,7 +88,7 @@ static void prune(Polygon90Set& fill_area,
 static void fillPolygon(const Polygon90& area,
                         dbTechLayer* layer,
                         dbBlock* block,
-                        const DensityFillShapesConfig& cfg,
+                        const FillShapesConfig& cfg,
                         int num_masks,
                         bool needs_opc,
                         Graphics* graphics,
@@ -508,24 +197,13 @@ void DensityFill::fillLayer(dbBlock* block,
                               fill_bounds_rect.xMax(),
                               fill_bounds_rect.yMax());
 
-  const DensityFillLayerConfig& cfg = layers_[layer];
+  const FillLayerConfig& cfg = layers_[layer];
 
   std::vector<Polygon90> polygons;
 
   // Do non-OPC fill
   Polygon90Set fill_area
       = fill_bounds - (non_fill + cfg.non_opc.space_to_non_fill);
-
-  if (debug_) {
-    const std::string filename
-        = std::string("fill_area_") + layer->getConstName() + "_non_opc.svg";
-    if (writeSvg(filename, fill_area, non_fill, fill_bounds_rect)) {
-      logger_->info(FIN, 9, "Wrote non-OPC fill area to {}.", filename);
-    } else {
-      logger_->warn(
-          FIN, 11, "Unable to write non-OPC fill area to {}.", filename);
-    }
-  }
 
   if (graphics_) {
     graphics_->status("Non-OPC Area");
@@ -581,133 +259,11 @@ void DensityFill::fillLayer(dbBlock* block,
   }
 }
 
-void DensityFill::benchmarkRectangleExtraction(const char* cfg_filename,
-                                               const Rect& fill_bounds_rect,
-                                               int left_copies,
-                                               int right_copies,
-                                               int bottom_copies,
-                                               int top_copies,
-                                               int runs)
-{
-  loadConfig(cfg_filename, db_->getTech());
-  dbBlock* block = db_->getChip()->getBlock();
-  const int tile_width = fill_bounds_rect.xMax() - fill_bounds_rect.xMin();
-  const int tile_height = fill_bounds_rect.yMax() - fill_bounds_rect.yMin();
-  const Rect scaled_fill_bounds(
-      fill_bounds_rect.xMin() - left_copies * tile_width,
-      fill_bounds_rect.yMin() - bottom_copies * tile_height,
-      fill_bounds_rect.xMax() + right_copies * tile_width,
-      fill_bounds_rect.yMax() + top_copies * tile_height);
-  const int horizontal_copies = left_copies + right_copies + 1;
-  const int vertical_copies = bottom_copies + top_copies + 1;
-  const int copies = horizontal_copies * vertical_copies;
-  std::vector<Polygon90Set> fill_areas;
-
-  for (auto* layer : db_->getTech()->getLayers()) {
-    auto layer_config = layers_.find(layer);
-    if (layer_config == layers_.end()) {
-      continue;
-    }
-
-    // Collect the same instance, wire, and via geometry used by fill().  The
-    // benchmark tiles its unioned geometry because object identity is not used
-    // by the rectangle extraction being measured.
-    Polygon90Set source_non_fill = orNonFills(block, layer);
-    std::vector<Rectangle> source_rectangles;
-    get_rectangles(source_rectangles, source_non_fill);
-
-    Polygon90Set non_fill;
-    for (int row = -bottom_copies; row <= top_copies; row++) {
-      const int y_offset = row * tile_height;
-      for (int column = -left_copies; column <= right_copies; column++) {
-        const int x_offset = column * tile_width;
-        for (const auto& rectangle : source_rectangles) {
-          non_fill.insert(makeRect(xl(rectangle) + x_offset,
-                                   yl(rectangle) + y_offset,
-                                   xh(rectangle) + x_offset,
-                                   yh(rectangle) + y_offset));
-        }
-      }
-    }
-
-    const auto& cfg = layer_config->second;
-    const auto fill_bounds = makeRect(scaled_fill_bounds.xMin(),
-                                      scaled_fill_bounds.yMin(),
-                                      scaled_fill_bounds.xMax(),
-                                      scaled_fill_bounds.yMax());
-    Polygon90Set fill_area
-        = fill_bounds - (non_fill + cfg.non_opc.space_to_non_fill);
-    fill_areas.push_back(std::move(fill_area));
-  }
-
-  double total_seconds = 0.0;
-  size_t rectangle_count = 0;
-  for (int run = 0; run < runs; run++) {
-    utl::Timer extraction_timer;
-    size_t run_rectangle_count = 0;
-    for (const auto& fill_area : fill_areas) {
-      std::vector<Rectangle> fill_rectangles;
-      get_rectangles(fill_rectangles, fill_area);
-      run_rectangle_count += fill_rectangles.size();
-    }
-    total_seconds += extraction_timer.elapsed();
-    rectangle_count = run_rectangle_count;
-  }
-
-  logger_->info(FIN,
-                12,
-                "Fill-area extraction: layers={}, copies={} ({}x{}), runs={}, "
-                "rectangles={}, average_seconds={:.6f}.",
-                fill_areas.size(),
-                copies,
-                horizontal_copies,
-                vertical_copies,
-                runs,
-                rectangle_count,
-                total_seconds / runs);
-}
-
-double DensityFill::tileGridMetalArea(const char* cfg_filename,
-                                      const Rect& region,
-                                      const odb::Point& origin,
-                                      int window_size,
-                                      int resolution,
-                                      const char* svg_filename)
-{
-  loadConfig(cfg_filename, db_->getTech());
-  dbBlock* block = db_->getChip()->getBlock();
-  double total_area = 0.0;
-  TileGrid grid({region, origin, window_size, resolution});
-
-  for (auto* layer : db_->getTech()->getLayers()) {
-    if (layers_.find(layer) == layers_.end()) {
-      continue;
-    }
-    Polygon90Set layer_shapes = orNonFills(block, layer);
-    grid.calculateMetalDensities(layer_shapes);
-    const double layer_area = grid.totalMetalArea();
-    logger_->info(FIN,
-                  17,
-                  "Tile grid: layer={}, tiles={}, metal_area={:.0f} DBU^2.",
-                  layer->getConstName(),
-                  grid.tiles().size(),
-                  layer_area);
-    total_area += layer_area;
-    if (svg_filename && svg_filename[0] != '\0') {
-      const std::string layer_svg
-          = std::string(svg_filename) + "_" + layer->getConstName() + ".svg";
-      grid.writeSvg(
-          layer_svg, layer_shapes, db_->getTech()->getDbUnitsPerMicron());
-    }
-  }
-  return total_area;
-}
-
 // Fill the design according to the given cfg file
 void DensityFill::fill(const char* cfg_filename, const odb::Rect& fill_area)
 {
   dbTech* tech = db_->getTech();
-  loadConfig(cfg_filename, tech);
+  layers_ = loadFillLayerConfigs(cfg_filename, tech, logger_);
 
   dbChip* chip = db_->getChip();
   dbBlock* block = chip->getBlock();

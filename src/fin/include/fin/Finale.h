@@ -17,6 +17,7 @@ class Finale
   Finale(odb::dbDatabase* db, utl::Logger* logger);
 
   void densityFill(const char* rules_filename, const odb::Rect& fill_area);
+  void minVarFill(const char* rules_filename, const odb::Rect& fill_area);
   void benchmarkRectangleExtraction(const char* rules_filename,
                                     const odb::Rect& fill_area,
                                     int left_copies,
@@ -32,11 +33,13 @@ class Finale
                            const char* svg_filename);
 
   void setDebug();
+  void setMinVarDebug();
 
  private:
   odb::dbDatabase* db_ = nullptr;
   utl::Logger* logger_ = nullptr;
   bool debug_ = false;
+  bool min_var_debug_ = false;
 };
 
 }  // namespace fin

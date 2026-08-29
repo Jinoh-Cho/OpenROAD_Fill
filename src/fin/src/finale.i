@@ -19,11 +19,26 @@ set_density_fill_debug_cmd()
 }
 
 void
+set_min_var_fill_debug_cmd()
+{
+  auto* finale = ord::OpenRoad::openRoad()->getFinale();
+  finale->setMinVarDebug();
+}
+
+void
 density_fill_cmd(const char* rules_filename,
                  const odb::Rect& fill_area)
 {
   auto *finale = ord::OpenRoad::openRoad()->getFinale();
   finale->densityFill(rules_filename, fill_area);
+}
+
+void
+min_var_fill_cmd(const char* rules_filename,
+                 const odb::Rect& fill_area)
+{
+  auto* finale = ord::OpenRoad::openRoad()->getFinale();
+  finale->minVarFill(rules_filename, fill_area);
 }
 
 void

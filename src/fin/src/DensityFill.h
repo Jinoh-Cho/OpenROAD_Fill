@@ -3,19 +3,15 @@
 
 #pragma once
 
-#include <map>
 #include <memory>
-#include <vector>
 
-#include "boost/property_tree/json_parser.hpp"
-#include "odb/PtrSetMap.h"
+#include "FillConfig.h"
 #include "odb/db.h"
 #include "odb/geom.h"
 #include "utl/Logger.h"
 
 namespace fin {
 
-struct DensityFillLayerConfig;
 class Graphics;
 
 ////////////////////////////////////////////////////////////////
@@ -34,31 +30,14 @@ class DensityFill
   DensityFill& operator=(const DensityFill&&) = delete;
 
   void fill(const char* cfg_filename, const odb::Rect& fill_area);
-  void benchmarkRectangleExtraction(const char* cfg_filename,
-                                    const odb::Rect& fill_area,
-                                    int left_copies,
-                                    int right_copies,
-                                    int bottom_copies,
-                                    int top_copies,
-                                    int runs);
-  double tileGridMetalArea(const char* cfg_filename,
-                           const odb::Rect& region,
-                           const odb::Point& origin,
-                           int window_size,
-                           int resolution,
-                           const char* svg_filename);
 
  private:
-  void loadConfig(const char* cfg_filename, odb::dbTech* tech);
-  void readAndExpandLayers(odb::dbTech* tech,
-                           boost::property_tree::ptree& tree);
   void fillLayer(odb::dbBlock* block,
                  odb::dbTechLayer* layer,
                  const odb::Rect& fill_bounds);
 
   odb::dbDatabase* db_;
-  odb::PtrMap<odb::dbTechLayer, DensityFillLayerConfig> layers_;
-  bool debug_;
+  FillLayerConfigs layers_;
   std::unique_ptr<Graphics> graphics_;
   utl::Logger* logger_;
 };
