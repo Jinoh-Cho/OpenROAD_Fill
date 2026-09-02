@@ -1,4 +1,5 @@
 load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2022-2025, The OpenROAD Authors
@@ -16,6 +17,7 @@ COMPULSORY_TESTS = [
 # only verifies that the experimental command completes successfully.
 PASSFAIL_TESTS = [
     "gcd_fill_rectangle_benchmark",
+    "gcd_fixed_dissection_lp",
     "gcd_tile_grid_density",
     "min_var_fill",
 ]
@@ -73,6 +75,19 @@ filegroup(
     )
     for test_name in ALL_TESTS
 ]
+
+cc_test(
+    name = "fill_utill_test",
+    srcs = ["cpp/FillUtillTest.cpp"],
+    features = ["-layering_check"],  # Tests FIN private algorithm headers.
+    includes = ["../src"],
+    deps = [
+        "//src/fin:fin",
+        "@boost.polygon",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
 
 py_test(
     name = "fin_man_tcl_check",

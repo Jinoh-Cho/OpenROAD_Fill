@@ -7,13 +7,15 @@
 #include <array>
 #include <fstream>
 #include <iterator>
+#include <numeric>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "FillConfig.h"
 #include "FillGeometry.h"
-#include "fin/TileGrid.h"
+#include "FillUtill.h"
+#include "FixedDissectionLp.h"
 #include "graphics.h"
 #include "polygon.h"
 #include "utl/timer.h"
@@ -364,13 +366,19 @@ double MinVarFill::tileGridMetalArea(const char* rules_filename,
     const Polygon90Set layer_shapes = orNonFills(block, layer);
     grid.calculateMetalDensities(layer_shapes);
     const double layer_area = grid.totalMetalArea();
+    const auto [min_window_density, max_window_density]
+        = getWindowDensityRange(grid.windows());
     logger_->info(
         FIN,
         17,
-        "MinVar tile grid: layer={}, tiles={}, metal_area={:.0f} DBU^2.",
+        "MinVar tile grid: layer={}, tiles={}, windows={}, metal_area={:.0f} "
+        "DBU^2, min_window_density={:.6f}, max_window_density={:.6f}.",
         layer->getConstName(),
         grid.tiles().size(),
-        layer_area);
+        grid.windows().size(),
+        layer_area,
+        min_window_density,
+        max_window_density);
     total_area += layer_area;
     if (svg_filename != nullptr && svg_filename[0] != '\0') {
       grid.writeSvg(
@@ -380,6 +388,95 @@ double MinVarFill::tileGridMetalArea(const char* rules_filename,
     }
   }
   return total_area;
+}
+
+double MinVarFill::fixedDissectionLp(const char* rules_filename,
+                                     const Rect& region,
+                                     const odb::Point& origin,
+                                     int window_size,
+                                     int resolution,
+                                     double max_density,
+                                     const char* svg_filename)
+{
+  const auto layers
+      = loadFillLayerConfigs(rules_filename, db_->getTech(), logger_);
+  auto* block = db_->getChip()->getBlock();
+  TileGrid grid({region, origin, window_size, resolution});
+  double total_fill_area = 0.0;
+  for (auto* layer : db_->getTech()->getLayers()) {
+    if (layers.find(layer) == layers.end()) {
+      continue;
+    }
+
+    const Polygon90Set layer_shapes = orNonFills(block, layer);
+    grid.calculateMetalDensities(layer_shapes);
+    const auto [min_window_density, max_window_density]
+        = getWindowDensityRange(grid.windows());
+    FixedDissectionLpProblem problem;
+    problem.max_density = max_density;
+    problem.feature_areas = grid.metalAreas();
+    problem.windows = grid.windowTileIndices();
+    problem.tile_areas.reserve(grid.tiles().size());
+    problem.max_fill_areas.reserve(grid.tiles().size());
+    for (size_t index = 0; index < grid.tiles().size(); index++) {
+      const double tile_area = grid.tiles()[index].area();
+      problem.tile_areas.push_back(tile_area);
+      // This is an ideal area capacity for LP planning.  Physical placement
+      // will replace it with spacing- and pattern-aware tile slack.
+      problem.max_fill_areas.push_back(
+          std::max(tile_area - problem.feature_areas[index], 0.0));
+    }
+
+    const FixedDissectionLpResult result = solveFixedDissectionLp(problem);
+    if (!result.solved) {
+      logger_->error(FIN,
+                     30,
+                     "Fixed-dissection LP failed for layer {}.",
+                     layer->getConstName());
+    }
+    for (size_t window_index = 0; window_index < grid.windows().size();
+         window_index++) {
+      DensityWindow& window = grid.windows()[window_index];
+      for (const size_t tile_index : problem.windows[window_index]) {
+        window.planned_fill_area += result.fill_areas[tile_index];
+      }
+      window.post_fill_density = (window.metal_area + window.planned_fill_area)
+                                 / window.bounds.area();
+    }
+    const auto [min_post_fill_density, max_post_fill_density]
+        = getWindowPostFillDensityRange(grid.windows());
+    const double planned_fill_area = std::accumulate(
+        result.fill_areas.begin(), result.fill_areas.end(), 0.0);
+    logger_->info(FIN,
+                  31,
+                  "Fixed-dissection LP: layer={}, tiles={}, windows={}, "
+                  "planned_fill_area={:.0f} DBU^2, "
+                  "min_window_density={:.6f}, max_window_density={:.6f}, "
+                  "min_post_fill_density={:.6f}, "
+                  "max_post_fill_density={:.6f}.",
+                  layer->getConstName(),
+                  grid.tiles().size(),
+                  grid.windows().size(),
+                  planned_fill_area,
+                  min_window_density,
+                  max_window_density,
+                  min_post_fill_density,
+                  max_post_fill_density);
+    if (svg_filename != nullptr && svg_filename[0] != '\0') {
+      grid.writeSvg(
+          std::string(svg_filename) + "_" + layer->getConstName() + ".svg",
+          layer_shapes,
+          db_->getTech()->getDbUnitsPerMicron(),
+          nullptr,
+          false);
+      grid.writeLpDensityMaps(
+          std::string(svg_filename) + "_" + layer->getConstName(),
+          layer_shapes,
+          result.fill_areas);
+    }
+    total_fill_area += planned_fill_area;
+  }
+  return total_fill_area;
 }
 
 }  // namespace fin

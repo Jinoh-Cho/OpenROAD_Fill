@@ -3,6 +3,8 @@
 
 include("openroad")
 
+find_package(ortools REQUIRED)
+
 swig_lib(NAME      fin
          NAMESPACE fin
          I_FILE    src/finale.i
@@ -16,8 +18,9 @@ target_sources(fin
     src/DensityFill.cpp
     src/FillConfig.cpp
     src/FillGeometry.cpp
+    src/FixedDissectionLp.cpp
     src/MinVarFill.cpp
-    src/TileGrid.cpp
+    src/FillUtill.cpp
     src/graphics.cpp
 )
 
@@ -31,6 +34,7 @@ target_link_libraries(fin
     odb
     gui
     Boost::boost
+    ortools::ortools
 )
 
 messages(

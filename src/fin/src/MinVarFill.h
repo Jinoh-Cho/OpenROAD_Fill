@@ -41,6 +41,13 @@ class MinVarFill
                            int window_size,
                            int resolution,
                            const char* svg_filename);
+  double fixedDissectionLp(const char* rules_filename,
+                           const odb::Rect& region,
+                           const odb::Point& origin,
+                           int window_size,
+                           int resolution,
+                           double max_density,
+                           const char* svg_filename);
 
   static bool writeFillAreaSvg(const std::string& filename,
                                const Polygon90Set& fill_area,

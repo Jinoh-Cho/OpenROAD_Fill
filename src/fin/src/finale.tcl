@@ -141,3 +141,47 @@ proc tile_grid_metal_area { args } {
     [odb::Point x $origin_x $origin_y] \
     [ord::microns_to_dbu $keys(-window)] $resolution $svg_file]
 }
+
+sta::define_cmd_args "fixed_dissection_lp" \
+  {[-rules rules_file] [-area {lx ly ux uy}] -window window_size [-origin {x y}] [-resolution resolution] -max_density density [-svg file]}
+
+proc fixed_dissection_lp { args } {
+  sta::parse_key_args "fixed_dissection_lp" args \
+    keys {-rules -area -window -origin -resolution -max_density -svg} flags {}
+  foreach required {-rules -window -max_density} {
+    if { ![info exists keys($required)] } {
+      utl::error FIN 32 "The $required argument must be specified."
+    }
+  }
+  if { ![string is double -strict $keys(-max_density)] \
+       || $keys(-max_density) < 0.0 || $keys(-max_density) > 1.0 } {
+    utl::error FIN 33 "The -max_density argument must be between 0.0 and 1.0."
+  }
+
+  set region [ord::get_db_core]
+  if { [info exists keys(-area)] } {
+    set area $keys(-area)
+    if { [llength $area] != 4 } {
+      utl::error FIN 34 "The -area argument must be a list of 4 coordinates."
+    }
+    lassign $area lx ly ux uy
+    set region [odb::Rect x [ord::microns_to_dbu $lx] [ord::microns_to_dbu $ly] \
+                           [ord::microns_to_dbu $ux] [ord::microns_to_dbu $uy]]
+  }
+  set origin {0 0}
+  if { [info exists keys(-origin)] } { set origin $keys(-origin) }
+  if { [llength $origin] != 2 } {
+    utl::error FIN 35 "The -origin argument must be a list of 2 coordinates."
+  }
+  lassign $origin ox oy
+  set origin_x [expr {[$region xMin] + [ord::microns_to_dbu $ox]}]
+  set origin_y [expr {[$region yMin] + [ord::microns_to_dbu $oy]}]
+  set resolution 4
+  if { [info exists keys(-resolution)] } { set resolution $keys(-resolution) }
+  set svg_file ""
+  if { [info exists keys(-svg)] } { set svg_file $keys(-svg) }
+  return [fin::fixed_dissection_lp_cmd $keys(-rules) $region \
+    [odb::Point x $origin_x $origin_y] \
+    [ord::microns_to_dbu $keys(-window)] $resolution $keys(-max_density) \
+    $svg_file]
+}

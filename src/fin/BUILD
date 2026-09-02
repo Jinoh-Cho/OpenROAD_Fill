@@ -21,11 +21,13 @@ cc_library(
         "src/FillConfig.h",
         "src/FillGeometry.cpp",
         "src/FillGeometry.h",
+        "src/FixedDissectionLp.cpp",
+        "src/FixedDissectionLp.h",
         "src/Finale.cpp",
         "src/MakeFinale.cpp",
         "src/MinVarFill.cpp",
         "src/MinVarFill.h",
-        "src/TileGrid.cpp",
+        "src/FillUtill.cpp",
         "src/graphics.cpp",
         "src/graphics.h",
         "src/polygon.h",
@@ -35,7 +37,7 @@ cc_library(
     hdrs = [
         "include/fin/Finale.h",
         "include/fin/MakeFinale.h",
-        "include/fin/TileGrid.h",
+        "src/FillUtill.h",
     ],
     includes = [
         "include",
@@ -49,6 +51,8 @@ cc_library(
         "@boost.polygon",
         "@boost.property_tree",
         "@boost.stacktrace",
+        "@or-tools//ortools/linear_solver",
+        "@or-tools//ortools/linear_solver:linear_solver_base",
         "@tcl_lang//:tcl",
     ],
 )

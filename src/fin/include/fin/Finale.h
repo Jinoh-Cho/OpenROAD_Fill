@@ -31,6 +31,13 @@ class Finale
                            int window_size,
                            int resolution,
                            const char* svg_filename);
+  double fixedDissectionLp(const char* rules_filename,
+                           const odb::Rect& region,
+                           const odb::Point& origin,
+                           int window_size,
+                           int resolution,
+                           double max_density,
+                           const char* svg_filename);
 
   void setDebug();
   void setMinVarDebug();

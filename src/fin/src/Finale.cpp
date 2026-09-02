@@ -70,4 +70,22 @@ double Finale::tileGridMetalArea(const char* rules_filename,
       rules_filename, region, origin, window_size, resolution, svg_filename);
 }
 
+double Finale::fixedDissectionLp(const char* rules_filename,
+                                 const odb::Rect& region,
+                                 const odb::Point& origin,
+                                 int window_size,
+                                 int resolution,
+                                 double max_density,
+                                 const char* svg_filename)
+{
+  MinVarFill filler(db_, logger_);
+  return filler.fixedDissectionLp(rules_filename,
+                                  region,
+                                  origin,
+                                  window_size,
+                                  resolution,
+                                  max_density,
+                                  svg_filename);
+}
+
 }  // namespace fin

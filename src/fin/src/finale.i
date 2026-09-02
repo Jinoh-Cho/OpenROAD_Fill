@@ -73,4 +73,24 @@ tile_grid_metal_area_cmd(const char* rules_filename,
       rules_filename, region, origin, window_size, resolution, svg_filename);
 }
 
+double
+fixed_dissection_lp_cmd(const char* rules_filename,
+                        const odb::Rect& region,
+                        const odb::Point& origin,
+                        int window_size,
+                        int resolution,
+                        double max_density,
+                        const char* svg_filename)
+{
+  auto* finale = ord::OpenRoad::openRoad()->getFinale();
+  return finale->fixedDissectionLp(
+      rules_filename,
+      region,
+      origin,
+      window_size,
+      resolution,
+      max_density,
+      svg_filename);
+}
+
 %} // inline
