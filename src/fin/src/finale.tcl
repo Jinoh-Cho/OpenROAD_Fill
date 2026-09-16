@@ -187,11 +187,11 @@ proc fixed_dissection_lp { args } {
 }
 
 sta::define_cmd_args "fixed_dissection_lp_fill" \
-  {[-rules rules_file] [-area {lx ly ux uy}] -window window_size [-origin {x y}] [-resolution resolution] -max_density density [-svg file]}
+  {[-rules rules_file] [-area {lx ly ux uy}] -window window_size [-origin {x y}] [-resolution resolution] [-min_tile_density density] -max_density density [-svg file]}
 
 proc fixed_dissection_lp_fill { args } {
   sta::parse_key_args "fixed_dissection_lp_fill" args \
-    keys {-rules -area -window -origin -resolution -max_density -svg} flags {}
+    keys {-rules -area -window -origin -resolution -min_tile_density -max_density -svg} flags {}
   foreach required {-rules -window -max_density} {
     if { ![info exists keys($required)] } {
       utl::error FIN 42 "The $required argument must be specified."
@@ -200,6 +200,14 @@ proc fixed_dissection_lp_fill { args } {
   if { ![string is double -strict $keys(-max_density)] \
        || $keys(-max_density) < 0.0 || $keys(-max_density) > 1.0 } {
     utl::error FIN 43 "The -max_density argument must be between 0.0 and 1.0."
+  }
+  set min_tile_density 0.0
+  if { [info exists keys(-min_tile_density)] } {
+    set min_tile_density $keys(-min_tile_density)
+  }
+  if { ![string is double -strict $min_tile_density] \
+       || $min_tile_density < 0.0 || $min_tile_density > 1.0 } {
+    utl::error FIN 49 "The -min_tile_density argument must be between 0.0 and 1.0."
   }
   set region [ord::get_db_core]
   if { [info exists keys(-area)] } {
@@ -225,7 +233,7 @@ proc fixed_dissection_lp_fill { args } {
   if { [info exists keys(-svg)] } { set svg_file $keys(-svg) }
   return [fin::fixed_dissection_lp_fill_cmd $keys(-rules) $region \
     [odb::Point x $origin_x $origin_y] \
-    [ord::microns_to_dbu $keys(-window)] $resolution $keys(-max_density) \
+    [ord::microns_to_dbu $keys(-window)] $resolution $min_tile_density $keys(-max_density) \
     $svg_file]
 }
 

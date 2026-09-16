@@ -99,6 +99,7 @@ fixed_dissection_lp_fill_cmd(const char* rules_filename,
                              const odb::Point& origin,
                              int window_size,
                              int resolution,
+                             double min_tile_density,
                              double max_density,
                              const char* svg_filename)
 {
@@ -108,6 +109,7 @@ fixed_dissection_lp_fill_cmd(const char* rules_filename,
                                        origin,
                                        window_size,
                                        resolution,
+                                       min_tile_density,
                                        max_density,
                                        svg_filename);
 }

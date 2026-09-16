@@ -108,6 +108,7 @@ fixed_dissection_lp
     -window window_size
     [-origin {x y}]
     [-resolution resolution]
+    [-min_tile_density density]
     -max_density density
     [-svg file]
 ```
@@ -146,6 +147,12 @@ fixed_dissection_lp_fill
     -max_density density
     [-svg file]
 ```
+
+`-min_tile_density` is a hard minimum post-fill density for every tile.
+`-max_density` remains the maximum density for every sliding window. If a
+tile's legal capacity, the sliding-window maximum, or the discrete fill
+candidates cannot satisfy the two constraints together, the command reports
+an infeasible error and does not retain any fill created by that command.
 
 The return value is the total area actually placed, in DBU². If `-svg` is
 given, FIN writes two SVGs per configured layer: `<file>_<layer>_fillable.svg`

@@ -93,6 +93,7 @@ double Finale::fixedDissectionLpFill(const char* rules_filename,
                                      const odb::Point& origin,
                                      int window_size,
                                      int resolution,
+                                     double min_tile_density,
                                      double max_density,
                                      const char* svg_filename)
 {
@@ -102,6 +103,7 @@ double Finale::fixedDissectionLpFill(const char* rules_filename,
                                       origin,
                                       window_size,
                                       resolution,
+                                      min_tile_density,
                                       max_density,
                                       svg_filename);
 }

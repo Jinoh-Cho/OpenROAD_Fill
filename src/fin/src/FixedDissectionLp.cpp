@@ -20,6 +20,10 @@ void validateProblem(const FixedDissectionLpProblem& problem)
   if (problem.max_density < 0.0 || problem.max_density > 1.0) {
     throw std::invalid_argument("max_density must be between zero and one.");
   }
+  if (problem.min_tile_density < 0.0 || problem.min_tile_density > 1.0) {
+    throw std::invalid_argument(
+        "min_tile_density must be between zero and one.");
+  }
   if (tile_count == 0 || problem.feature_areas.size() != tile_count
       || problem.max_fill_areas.size() != tile_count) {
     throw std::invalid_argument(
@@ -71,8 +75,16 @@ FixedDissectionLpResult solveFixedDissectionLp(
   std::vector<MPVariable*> fill_variables;
   fill_variables.reserve(problem.tile_areas.size());
   for (size_t index = 0; index < problem.tile_areas.size(); index++) {
-    fill_variables.push_back(solver->MakeNumVar(
-        0.0, problem.max_fill_areas[index], "p_" + std::to_string(index)));
+    const double min_fill_area
+        = std::max(problem.min_tile_density * problem.tile_areas[index]
+                       - problem.feature_areas[index],
+                   0.0);
+    if (min_fill_area > problem.max_fill_areas[index]) {
+      return {};
+    }
+    fill_variables.push_back(solver->MakeNumVar(min_fill_area,
+                                                problem.max_fill_areas[index],
+                                                "p_" + std::to_string(index)));
   }
   MPVariable* min_window_area = solver->MakeNumVar(0.0, infinity, "M");
 

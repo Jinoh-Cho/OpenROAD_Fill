@@ -6,6 +6,7 @@ or_integration_tests(
     gcd_fill_rectangle_benchmark
     gcd_fixed_dissection_lp
     gcd_fixed_dissection_lp_fill
+    gcd_fixed_dissection_lp_fill_infeasible
     gcd_multilevel_fixed_dissection_lp
     gcd_tile_grid_density
     min_var_fill

@@ -33,6 +33,27 @@ struct DensityWindow
   double post_fill_density = 0.0;
 };
 
+enum class TileViolationReason
+{
+  kCapacity,
+  kDiscreteCandidate
+};
+
+struct TileViolation
+{
+  size_t tile_index;
+  TileViolationReason reason;
+  double required_density;
+  double available_density;
+};
+
+struct WindowViolation
+{
+  size_t window_index;
+  double required_fill_area;
+  double fill_budget;
+};
+
 // Windows retained by J40's multilevel density analysis.  window_indices
 // refer to TileGrid::windows(), whose tiles are at the finest resolution.
 struct MultilevelDensityAnalysisResult
@@ -73,7 +94,12 @@ class TileGrid
       bool show_tile_values = true,
       const boost::polygon::polygon_90_set_data<int>* placed_fill_shapes
       = nullptr,
-      const std::vector<Polygon90>* fillable_polygons = nullptr) const;
+      const std::vector<Polygon90>* fillable_polygons = nullptr,
+      const std::vector<double>* target_tile_densities = nullptr,
+      const std::vector<TileViolation>* tile_violations = nullptr,
+      const std::vector<WindowViolation>* window_violations = nullptr,
+      const std::vector<double>* bloated_non_fill_areas = nullptr,
+      const std::vector<double>* fillable_region_areas = nullptr) const;
   bool writeLpDensityMaps(
       const std::string& filename,
       const boost::polygon::polygon_90_set_data<int>& metal_shapes,

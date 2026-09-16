@@ -43,6 +43,7 @@ class Finale
                                const odb::Point& origin,
                                int window_size,
                                int resolution,
+                               double min_tile_density,
                                double max_density,
                                const char* svg_filename);
   double multilevelFixedDissectionLp(const char* rules_filename,

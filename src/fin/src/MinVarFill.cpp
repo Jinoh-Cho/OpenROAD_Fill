@@ -607,6 +607,7 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
                                          const odb::Point& origin,
                                          int window_size,
                                          int resolution,
+                                         double min_tile_density,
                                          double max_density,
                                          const char* svg_filename)
 {
@@ -615,135 +616,348 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
   auto* block = db_->getChip()->getBlock();
   TileGrid grid({region, origin, window_size, resolution});
   double total_placed_area = 0.0;
+  std::vector<dbFill*> created_fills;
 
-  for (auto* layer : db_->getTech()->getLayers()) {
-    const auto config_it = layers.find(layer);
-    if (config_it == layers.end()) {
-      continue;
-    }
-    const FillLayerConfig& config = config_it->second;
-    if (config.has_opc) {
-      logger_->warn(FIN,
-                    46,
-                    "Fixed-dissection LP fill uses non-OPC rules only on "
-                    "layer {}; OPC fill is not yet supported.",
-                    layer->getConstName());
-    }
-
-    const Polygon90Set layer_shapes = orNonFills(block, layer);
-    grid.calculateMetalDensities(layer_shapes);
-
-    std::vector<std::vector<Rectangle>> tile_candidates;
-    tile_candidates.reserve(grid.tiles().size());
-    std::vector<Polygon90> fillable_polygons;
-    FixedDissectionLpProblem problem;
-    problem.max_density = max_density;
-    problem.feature_areas = grid.metalAreas();
-    problem.windows = grid.windowTileIndices();
-    problem.tile_areas.reserve(grid.tiles().size());
-    problem.max_fill_areas.reserve(grid.tiles().size());
-    for (const Rect& tile : grid.tiles()) {
-      Polygon90Set tile_fillable_area;
-      std::vector<Rectangle> candidates
-          = makeTileFillCandidates(tile,
-                                   layer_shapes,
-                                   layer,
-                                   config.non_opc,
-                                   graphics_.get(),
-                                   &tile_fillable_area);
-      std::vector<Polygon90> tile_fillable_polygons;
-      tile_fillable_area.get(tile_fillable_polygons);
-      fillable_polygons.insert(fillable_polygons.end(),
-                               tile_fillable_polygons.begin(),
-                               tile_fillable_polygons.end());
-      double capacity = 0.0;
-      for (const Rectangle& candidate : candidates) {
-        capacity += static_cast<double>(xh(candidate) - xl(candidate))
-                    * (yh(candidate) - yl(candidate));
+  try {
+    for (auto* layer : db_->getTech()->getLayers()) {
+      const auto config_it = layers.find(layer);
+      if (config_it == layers.end()) {
+        continue;
       }
-      tile_candidates.push_back(std::move(candidates));
-      problem.tile_areas.push_back(tile.area());
-      problem.max_fill_areas.push_back(capacity);
-    }
+      const FillLayerConfig& config = config_it->second;
+      if (config.has_opc) {
+        logger_->warn(FIN,
+                      46,
+                      "Fixed-dissection LP fill uses non-OPC rules only on "
+                      "layer {}; OPC fill is not yet supported.",
+                      layer->getConstName());
+      }
 
-    const FixedDissectionLpResult result = solveFixedDissectionLp(problem);
-    if (!result.solved) {
-      logger_->error(FIN,
-                     47,
-                     "Fixed-dissection LP fill failed for layer {}.",
-                     layer->getConstName());
-    }
+      const Polygon90Set layer_shapes = orNonFills(block, layer);
+      grid.calculateMetalDensities(layer_shapes);
+      const Polygon90Set bloated_non_fill
+          = layer_shapes + config.non_opc.space_to_non_fill;
+      std::vector<double> bloated_non_fill_areas;
+      bloated_non_fill_areas.reserve(grid.tiles().size());
+      for (const Rect& tile : grid.tiles()) {
+        Polygon90Set tile_polygon;
+        tile_polygon
+            += makeRect(tile.xMin(), tile.yMin(), tile.xMax(), tile.yMax());
+        bloated_non_fill_areas.push_back(
+            boost::polygon::area(bloated_non_fill & tile_polygon));
+      }
 
-    std::vector<double> placed_areas(grid.tiles().size(), 0.0);
-    std::vector<Rectangle> selected_fills;
-    for (size_t tile_index = 0; tile_index < tile_candidates.size();
-         tile_index++) {
-      const double target_area = result.fill_areas[tile_index];
-      for (const Rectangle& candidate : tile_candidates[tile_index]) {
-        const double candidate_area
-            = static_cast<double>(xh(candidate) - xl(candidate))
-              * (yh(candidate) - yl(candidate));
-        if (placed_areas[tile_index] + candidate_area <= target_area) {
-          selected_fills.push_back(candidate);
-          placed_areas[tile_index] += candidate_area;
+      std::vector<std::vector<Rectangle>> tile_candidates;
+      tile_candidates.reserve(grid.tiles().size());
+      std::vector<Polygon90> fillable_polygons;
+      std::vector<double> fillable_region_areas;
+      fillable_region_areas.reserve(grid.tiles().size());
+      std::vector<double> target_tile_densities;
+      std::vector<TileViolation> tile_violations;
+      std::vector<WindowViolation> window_violations;
+      const size_t layer_fill_start = created_fills.size();
+      try {
+        FixedDissectionLpProblem problem;
+        problem.max_density = max_density;
+        problem.min_tile_density = min_tile_density;
+        problem.feature_areas = grid.metalAreas();
+        problem.windows = grid.windowTileIndices();
+        problem.tile_areas.reserve(grid.tiles().size());
+        problem.max_fill_areas.reserve(grid.tiles().size());
+        for (const Rect& tile : grid.tiles()) {
+          Polygon90Set tile_fillable_area;
+          std::vector<Rectangle> candidates
+              = makeTileFillCandidates(tile,
+                                       layer_shapes,
+                                       layer,
+                                       config.non_opc,
+                                       graphics_.get(),
+                                       &tile_fillable_area);
+          std::vector<Polygon90> tile_fillable_polygons;
+          tile_fillable_area.get(tile_fillable_polygons);
+          fillable_polygons.insert(fillable_polygons.end(),
+                                   tile_fillable_polygons.begin(),
+                                   tile_fillable_polygons.end());
+          fillable_region_areas.push_back(
+              boost::polygon::area(tile_fillable_area));
+          double capacity = 0.0;
+          for (const Rectangle& candidate : candidates) {
+            capacity += static_cast<double>(xh(candidate) - xl(candidate))
+                        * (yh(candidate) - yl(candidate));
+          }
+          tile_candidates.push_back(std::move(candidates));
+          problem.tile_areas.push_back(tile.area());
+          problem.max_fill_areas.push_back(capacity);
         }
+
+        for (size_t tile_index = 0; tile_index < grid.tiles().size();
+             tile_index++) {
+          const double required_fill_area
+              = std::max(min_tile_density * problem.tile_areas[tile_index]
+                             - problem.feature_areas[tile_index],
+                         0.0);
+          if (required_fill_area > problem.max_fill_areas[tile_index]) {
+            const Rect& tile = grid.tiles()[tile_index];
+            const double max_tile_density
+                = (problem.feature_areas[tile_index]
+                   + problem.max_fill_areas[tile_index])
+                  / problem.tile_areas[tile_index];
+            tile_violations.push_back({tile_index,
+                                       TileViolationReason::kCapacity,
+                                       min_tile_density,
+                                       max_tile_density});
+            logger_->error(
+                FIN,
+                50,
+                "Fixed-dissection LP fill is infeasible on layer {}: tile {} "
+                "({}, {})-({}, {}) requires minimum density {:.6f}, but its "
+                "legal fill capacity reaches only {:.6f}.",
+                layer->getConstName(),
+                tile_index,
+                tile.xMin(),
+                tile.yMin(),
+                tile.xMax(),
+                tile.yMax(),
+                min_tile_density,
+                max_tile_density);
+          }
+        }
+
+        for (size_t window_index = 0; window_index < problem.windows.size();
+             window_index++) {
+          double required_fill_area = 0.0;
+          double window_area = 0.0;
+          double feature_area = 0.0;
+          for (const size_t tile_index : problem.windows[window_index]) {
+            required_fill_area
+                += std::max(min_tile_density * problem.tile_areas[tile_index]
+                                - problem.feature_areas[tile_index],
+                            0.0);
+            window_area += problem.tile_areas[tile_index];
+            feature_area += problem.feature_areas[tile_index];
+          }
+          const double fill_budget
+              = std::max(max_density * window_area - feature_area, 0.0);
+          if (required_fill_area > fill_budget) {
+            window_violations.push_back(
+                {window_index, required_fill_area, fill_budget});
+          }
+        }
+        if (!window_violations.empty()) {
+          logger_->error(
+              FIN,
+              51,
+              "Fixed-dissection LP fill is infeasible on layer {}: "
+              "-min_tile_density {:.6f} and -max_density {:.6f} cannot "
+              "be satisfied simultaneously.",
+              layer->getConstName(),
+              min_tile_density,
+              max_density);
+        }
+
+        const FixedDissectionLpResult result = solveFixedDissectionLp(problem);
+        if (!result.solved) {
+          logger_->error(
+              FIN,
+              51,
+              "Fixed-dissection LP fill is infeasible on layer {}: "
+              "-min_tile_density {:.6f} and -max_density {:.6f} cannot "
+              "be satisfied simultaneously.",
+              layer->getConstName(),
+              min_tile_density,
+              max_density);
+        }
+
+        target_tile_densities.reserve(grid.tiles().size());
+        for (size_t tile_index = 0; tile_index < grid.tiles().size();
+             tile_index++) {
+          target_tile_densities.push_back((problem.feature_areas[tile_index]
+                                           + result.fill_areas[tile_index])
+                                          / problem.tile_areas[tile_index]);
+        }
+
+        std::vector<double> placed_areas(grid.tiles().size(), 0.0);
+        std::vector<Rectangle> selected_fills;
+        for (size_t tile_index = 0; tile_index < tile_candidates.size();
+             tile_index++) {
+          const double target_area = result.fill_areas[tile_index];
+          for (const Rectangle& candidate : tile_candidates[tile_index]) {
+            const double candidate_area
+                = static_cast<double>(xh(candidate) - xl(candidate))
+                  * (yh(candidate) - yl(candidate));
+            if (placed_areas[tile_index] + candidate_area <= target_area) {
+              selected_fills.push_back(candidate);
+              placed_areas[tile_index] += candidate_area;
+            }
+          }
+        }
+
+        // for (size_t tile_index = 0; tile_index < grid.tiles().size();
+        //      tile_index++) {
+        //   const double placed_density
+        //       = (problem.feature_areas[tile_index] + placed_areas[tile_index])
+        //         / problem.tile_areas[tile_index];
+          // if (placed_density < min_tile_density) {
+          //   const Rect& tile = grid.tiles()[tile_index];
+          //   tile_violations.push_back({tile_index,
+          //                              TileViolationReason::kDiscreteCandidate,
+          //                              min_tile_density,
+          //                              placed_density});
+          //   logger_->error(
+          //       FIN,
+          //       52,
+          //       "Fixed-dissection LP fill is infeasible on layer {}: tile {} "
+          //       "({}, {})-({}, {}) reaches density {:.6f}, below requested "
+          //       "minimum density {:.6f} with the available fill candidates.",
+          //       layer->getConstName(),
+          //       tile_index,
+          //       tile.xMin(),
+          //       tile.yMin(),
+          //       tile.xMax(),
+          //       tile.yMax(),
+          //       placed_density,
+          //       min_tile_density);
+          // }
+        // }
+
+        const int mask_count = std::max(config.num_masks, 1);
+        int mask_index = 0;
+        Polygon90Set post_fill_shapes = layer_shapes;
+        Polygon90Set selected_fill_shapes;
+        for (const Rectangle& fill : selected_fills) {
+          const int mask = mask_count == 1 ? 0 : mask_index++ % mask_count + 1;
+          created_fills.push_back(dbFill::create(block,
+                                                 false,
+                                                 mask,
+                                                 layer,
+                                                 xl(fill),
+                                                 yl(fill),
+                                                 xh(fill),
+                                                 yh(fill)));
+          const Polygon90 fill_shape
+              = makeRect(xl(fill), yl(fill), xh(fill), yh(fill));
+          post_fill_shapes += fill_shape;
+          selected_fill_shapes += fill_shape;
+        }
+
+        grid.calculateMetalDensities(post_fill_shapes);
+        const auto [min_post_fill_density, max_post_fill_density]
+            = getWindowDensityRange(grid.windows());
+        const double planned_area = std::accumulate(
+            result.fill_areas.begin(), result.fill_areas.end(), 0.0);
+        const double placed_area
+            = std::accumulate(placed_areas.begin(), placed_areas.end(), 0.0);
+        for (size_t tile_index = 0; tile_index < grid.tiles().size();
+             tile_index++) {
+          const double tile_area = problem.tile_areas[tile_index];
+          const double target_density = target_tile_densities[tile_index];
+          const double actual_density
+              = grid.metalAreas()[tile_index] / tile_area;
+          const double shortage
+              = std::max(target_density - actual_density, 0.0);
+          logger_->info(FIN,
+                        53,
+                        "Fixed-dissection LP tile: layer={}, tile={}, "
+                        "target={:.6f}, actual={:.6f}, shortage={:.6f}.",
+                        layer->getConstName(),
+                        tile_index,
+                        target_density,
+                        actual_density,
+                        shortage);
+        }
+        logger_->info(
+            FIN,
+            48,
+            "Fixed-dissection LP fill: layer={}, planned_fill_area={:.0f} "
+            "DBU^2, placed_fill_area={:.0f} DBU^2, "
+            "min_post_fill_density={:.6f}, "
+            "max_post_fill_density={:.6f}.",
+            layer->getConstName(),
+            planned_area,
+            placed_area,
+            min_post_fill_density,
+            max_post_fill_density);
+        if (svg_filename != nullptr && svg_filename[0] != '\0') {
+          const std::string layer_svg
+              = std::string(svg_filename) + "_" + layer->getConstName();
+          grid.writeSvg(layer_svg + "_fillable.svg",
+                        layer_shapes,
+                        db_->getTech()->getDbUnitsPerMicron(),
+                        nullptr,
+                        true,
+                        nullptr,
+                        &fillable_polygons,
+                        &target_tile_densities,
+                        nullptr,
+                        nullptr,
+                        &bloated_non_fill_areas,
+                        &fillable_region_areas);
+          grid.writeSvg(layer_svg + ".svg",
+                        layer_shapes,
+                        db_->getTech()->getDbUnitsPerMicron(),
+                        nullptr,
+                        true,
+                        &selected_fill_shapes,
+                        &fillable_polygons,
+                        &target_tile_densities,
+                        &tile_violations,
+                        &window_violations,
+                        &bloated_non_fill_areas,
+                        &fillable_region_areas);
+        }
+        total_placed_area += placed_area;
+      } catch (const std::runtime_error& error) {
+        const std::string error_id(error.what());
+        if (error_id != "FIN-0050" && error_id != "FIN-0051"
+            && error_id != "FIN-0052") {
+          throw;
+        }
+        for (size_t index = layer_fill_start; index < created_fills.size();
+             index++) {
+          dbFill::destroy(created_fills[index]);
+        }
+        created_fills.resize(layer_fill_start);
+        if (svg_filename != nullptr && svg_filename[0] != '\0') {
+          const std::string layer_svg
+              = std::string(svg_filename) + "_" + layer->getConstName();
+          grid.writeSvg(
+              layer_svg + "_fillable.svg",
+              layer_shapes,
+              db_->getTech()->getDbUnitsPerMicron(),
+              nullptr,
+              true,
+              nullptr,
+              &fillable_polygons,
+              target_tile_densities.empty() ? nullptr : &target_tile_densities,
+              &tile_violations,
+              &window_violations,
+              &bloated_non_fill_areas,
+              &fillable_region_areas);
+          Polygon90Set no_fill_shapes;
+          grid.writeSvg(
+              layer_svg + ".svg",
+              layer_shapes,
+              db_->getTech()->getDbUnitsPerMicron(),
+              nullptr,
+              true,
+              &no_fill_shapes,
+              &fillable_polygons,
+              target_tile_densities.empty() ? nullptr : &target_tile_densities,
+              &tile_violations,
+              &window_violations,
+              &bloated_non_fill_areas,
+              &fillable_region_areas);
+        }
+        continue;
       }
     }
-
-    const int mask_count = std::max(config.num_masks, 1);
-    int mask_index = 0;
-    Polygon90Set post_fill_shapes = layer_shapes;
-    Polygon90Set selected_fill_shapes;
-    for (const Rectangle& fill : selected_fills) {
-      const int mask = mask_count == 1 ? 0 : mask_index++ % mask_count + 1;
-      dbFill::create(
-          block, false, mask, layer, xl(fill), yl(fill), xh(fill), yh(fill));
-      const Polygon90 fill_shape
-          = makeRect(xl(fill), yl(fill), xh(fill), yh(fill));
-      post_fill_shapes += fill_shape;
-      selected_fill_shapes += fill_shape;
+    return total_placed_area;
+  } catch (...) {
+    for (dbFill* fill : created_fills) {
+      dbFill::destroy(fill);
     }
-
-    grid.calculateMetalDensities(post_fill_shapes);
-    const auto [min_post_fill_density, max_post_fill_density]
-        = getWindowDensityRange(grid.windows());
-    const double planned_area = std::accumulate(
-        result.fill_areas.begin(), result.fill_areas.end(), 0.0);
-    const double placed_area
-        = std::accumulate(placed_areas.begin(), placed_areas.end(), 0.0);
-    logger_->info(
-        FIN,
-        48,
-        "Fixed-dissection LP fill: layer={}, planned_fill_area={:.0f} "
-        "DBU^2, placed_fill_area={:.0f} DBU^2, "
-        "min_post_fill_density={:.6f}, "
-        "max_post_fill_density={:.6f}.",
-        layer->getConstName(),
-        planned_area,
-        placed_area,
-        min_post_fill_density,
-        max_post_fill_density);
-    if (svg_filename != nullptr && svg_filename[0] != '\0') {
-      const std::string layer_svg
-          = std::string(svg_filename) + "_" + layer->getConstName();
-      grid.writeSvg(layer_svg + "_fillable.svg",
-                    layer_shapes,
-                    db_->getTech()->getDbUnitsPerMicron(),
-                    nullptr,
-                    true,
-                    nullptr,
-                    &fillable_polygons);
-      grid.writeSvg(layer_svg + ".svg",
-                    layer_shapes,
-                    db_->getTech()->getDbUnitsPerMicron(),
-                    nullptr,
-                    true,
-                    &selected_fill_shapes,
-                    &fillable_polygons);
-    }
-    total_placed_area += placed_area;
+    throw;
   }
-  return total_placed_area;
 }
 
 double MinVarFill::multilevelFixedDissectionLp(const char* rules_filename,

@@ -13,6 +13,7 @@ namespace fin {
 struct FixedDissectionLpProblem
 {
   double max_density;
+  double min_tile_density = 0.0;
   std::vector<double> tile_areas;
   std::vector<double> feature_areas;
   std::vector<double> max_fill_areas;
