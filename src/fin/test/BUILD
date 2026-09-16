@@ -18,6 +18,8 @@ COMPULSORY_TESTS = [
 PASSFAIL_TESTS = [
     "gcd_fill_rectangle_benchmark",
     "gcd_fixed_dissection_lp",
+    "gcd_fixed_dissection_lp_fill",
+    "gcd_multilevel_fixed_dissection_lp",
     "gcd_tile_grid_density",
     "min_var_fill",
 ]
@@ -84,6 +86,18 @@ cc_test(
     deps = [
         "//src/fin:fin",
         "@boost.polygon",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "ml_fixed_dissection_lp_test",
+    srcs = ["cpp/MLFixedDissectionLpTest.cpp"],
+    features = ["-layering_check"],  # Tests FIN private algorithm headers.
+    includes = ["../src"],
+    deps = [
+        "//src/fin:fin",
         "@googletest//:gtest",
         "@googletest//:gtest_main",
     ],

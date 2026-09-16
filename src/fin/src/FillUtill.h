@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "odb/geom.h"
+#include "polygon.h"
 
 namespace boost::polygon {
 template <typename T>
@@ -32,6 +33,16 @@ struct DensityWindow
   double post_fill_density = 0.0;
 };
 
+// Windows retained by J40's multilevel density analysis.  window_indices
+// refer to TileGrid::windows(), whose tiles are at the finest resolution.
+struct MultilevelDensityAnalysisResult
+{
+  std::vector<size_t> window_indices;
+  int levels = 0;
+  double max_window_area = 0.0;
+  double bloat_max_window_area = 0.0;
+};
+
 // Return the minimum and maximum densities across all windows.  An empty
 // collection has a density range of {0.0, 0.0}.
 std::pair<double, double> getWindowDensityRange(
@@ -48,11 +59,21 @@ class TileGrid
   const std::vector<DensityWindow>& windows() const { return windows_; }
   const std::vector<double>& metalAreas() const { return metal_areas_; }
   std::vector<std::vector<size_t>> windowTileIndices() const;
-  bool writeSvg(const std::string& filename,
-                const boost::polygon::polygon_90_set_data<int>& metal_shapes,
-                int dbu_per_micron,
-                const std::vector<double>* planned_fill_areas = nullptr,
-                bool show_tile_values = true) const;
+  std::vector<std::vector<size_t>> windowTileIndices(
+      const std::vector<size_t>& window_indices) const;
+  // Run J40's multilevel maximum-density analysis.  resolution must be a
+  // power of two; it is the finest r-dissection used by this TileGrid.
+  MultilevelDensityAnalysisResult analyzeMultilevelDensity(
+      double relative_accuracy) const;
+  bool writeSvg(
+      const std::string& filename,
+      const boost::polygon::polygon_90_set_data<int>& metal_shapes,
+      int dbu_per_micron,
+      const std::vector<double>* planned_fill_areas = nullptr,
+      bool show_tile_values = true,
+      const boost::polygon::polygon_90_set_data<int>* placed_fill_shapes
+      = nullptr,
+      const std::vector<Polygon90>* fillable_polygons = nullptr) const;
   bool writeLpDensityMaps(
       const std::string& filename,
       const boost::polygon::polygon_90_set_data<int>& metal_shapes,

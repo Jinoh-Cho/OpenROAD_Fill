@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <fstream>
 #include <iomanip>
+#include <numeric>
 #include <stdexcept>
 
 #include "boost/polygon/polygon.hpp"
@@ -14,6 +15,7 @@ namespace {
 using Rectangle = boost::polygon::rectangle_data<int>;
 using Polygon90Set = boost::polygon::polygon_90_set_data<int>;
 using boost::polygon::operators::operator&;
+using boost::polygon::operators::operator+=;
 
 Rectangle makeRectangle(const odb::Rect& rect)
 {
@@ -29,6 +31,12 @@ int alignedStart(int coordinate, int origin, int tile_size)
   return origin - (-(offset + 1) / tile_size + 1) * tile_size;
 }
 
+bool rectanglesIntersect(const odb::Rect& lhs, const odb::Rect& rhs)
+{
+  return lhs.xMin() < rhs.xMax() && rhs.xMin() < lhs.xMax()
+         && lhs.yMin() < rhs.yMax() && rhs.yMin() < lhs.yMax();
+}
+
 struct DensityMapCell
 {
   size_t column;
@@ -37,6 +45,25 @@ struct DensityMapCell
   double metal_density;
   double lp_density;
 };
+
+void writeSvgPolygonPath(std::ofstream& svg, const Polygon90& polygon)
+{
+  const auto write_ring = [&svg](const auto& ring) {
+    bool first = true;
+    for (auto point_it = ring.begin(); point_it != ring.end(); point_it++) {
+      const auto point = *point_it;
+      svg << (first ? "M " : "L ") << point.x() << ' ' << point.y() << ' ';
+      first = false;
+    }
+    if (!first) {
+      svg << "Z ";
+    }
+  };
+  write_ring(polygon);
+  for (auto hole = polygon.begin_holes(); hole != polygon.end_holes(); hole++) {
+    write_ring(*hole);
+  }
+}
 
 bool writeDensityMap(const std::string& filename,
                      const std::string& title,
@@ -223,9 +250,21 @@ TileGrid::TileGrid(const TileGridConfig& config) : region_(config.region)
 
 std::vector<std::vector<size_t>> TileGrid::windowTileIndices() const
 {
+  std::vector<size_t> indices(windows_.size());
+  std::iota(indices.begin(), indices.end(), 0);
+  return windowTileIndices(indices);
+}
+
+std::vector<std::vector<size_t>> TileGrid::windowTileIndices(
+    const std::vector<size_t>& window_indices) const
+{
   std::vector<std::vector<size_t>> window_tiles;
-  window_tiles.reserve(windows_.size());
-  for (const DensityWindow& window : windows_) {
+  window_tiles.reserve(window_indices.size());
+  for (const size_t window_index : window_indices) {
+    if (window_index >= windows_.size()) {
+      throw std::invalid_argument("A multilevel window index is invalid.");
+    }
+    const DensityWindow& window = windows_[window_index];
     std::vector<size_t> tile_indices;
     tile_indices.reserve(tiles_per_window_ * tiles_per_window_);
     for (size_t row = window.first_tile_y;
@@ -242,12 +281,129 @@ std::vector<std::vector<size_t>> TileGrid::windowTileIndices() const
   return window_tiles;
 }
 
+MultilevelDensityAnalysisResult TileGrid::analyzeMultilevelDensity(
+    const double relative_accuracy) const
+{
+  if (relative_accuracy <= 0.0 || relative_accuracy > 1.0) {
+    throw std::invalid_argument(
+        "Multilevel relative accuracy must be between zero and one.");
+  }
+  if (metal_areas_.size() != tiles_.size()) {
+    throw std::invalid_argument(
+        "Calculate tile metal densities before multilevel analysis.");
+  }
+  if ((tiles_per_window_ & (tiles_per_window_ - 1)) != 0) {
+    throw std::invalid_argument(
+        "Multilevel analysis requires a power-of-two tile resolution.");
+  }
+
+  MultilevelDensityAnalysisResult result;
+  if (windows_.empty()) {
+    return result;
+  }
+
+  std::vector<odb::Rect> surviving_bloated_windows;
+  std::vector<bool> recorded(windows_.size(), false);
+  for (int level_resolution = 1; level_resolution <= tiles_per_window_;
+       level_resolution *= 2) {
+    const size_t stride = tiles_per_window_ / level_resolution;
+    double level_max = 0.0;
+    double level_bloat_max = 0.0;
+    std::vector<odb::Rect> next_survivors;
+    std::vector<bool> level_candidates(windows_.size(), false);
+
+    for (size_t index = 0; index < windows_.size(); index++) {
+      const DensityWindow& window = windows_[index];
+      if (window.first_tile_x % stride != 0
+          || window.first_tile_y % stride != 0) {
+        continue;
+      }
+      if (!surviving_bloated_windows.empty()) {
+        bool is_candidate = false;
+        for (const odb::Rect& candidate : surviving_bloated_windows) {
+          if (rectanglesIntersect(window.bounds, candidate)) {
+            is_candidate = true;
+            break;
+          }
+        }
+        if (!is_candidate) {
+          continue;
+        }
+      }
+
+      level_candidates[index] = true;
+      recorded[index] = true;
+      level_max = std::max(level_max, window.metal_area);
+      const size_t last_x = window.first_tile_x + tiles_per_window_ + stride;
+      const size_t last_y = window.first_tile_y + tiles_per_window_ + stride;
+      if (last_x > tile_columns_ || last_y * tile_columns_ > tiles_.size()) {
+        continue;
+      }
+      double bloat_area = 0.0;
+      for (size_t row = window.first_tile_y; row < last_y; row++) {
+        for (size_t column = window.first_tile_x; column < last_x; column++) {
+          bloat_area += metal_areas_[row * tile_columns_ + column];
+        }
+      }
+      level_bloat_max = std::max(level_bloat_max, bloat_area);
+    }
+
+    for (size_t index = 0; index < windows_.size(); index++) {
+      const DensityWindow& window = windows_[index];
+      if (!level_candidates[index] || window.first_tile_x % stride != 0
+          || window.first_tile_y % stride != 0) {
+        continue;
+      }
+      const size_t last_x = window.first_tile_x + tiles_per_window_ + stride;
+      const size_t last_y = window.first_tile_y + tiles_per_window_ + stride;
+      if (last_x > tile_columns_ || last_y * tile_columns_ > tiles_.size()) {
+        continue;
+      }
+      double bloat_area = 0.0;
+      for (size_t row = window.first_tile_y; row < last_y; row++) {
+        for (size_t column = window.first_tile_x; column < last_x; column++) {
+          bloat_area += metal_areas_[row * tile_columns_ + column];
+        }
+      }
+      if (bloat_area > level_max) {
+        const odb::Rect& last_tile
+            = tiles_[(last_y - 1) * tile_columns_ + last_x - 1];
+        next_survivors.emplace_back(window.bounds.xMin(),
+                                    window.bounds.yMin(),
+                                    last_tile.xMax(),
+                                    last_tile.yMax());
+      }
+    }
+
+    result.levels++;
+    result.max_window_area = level_max;
+    result.bloat_max_window_area = level_bloat_max;
+    const double relative_gap = level_max == 0.0
+                                    ? (level_bloat_max == 0.0 ? 0.0 : 1.0)
+                                    : (level_bloat_max - level_max) / level_max;
+    if (relative_gap <= relative_accuracy || next_survivors.empty()
+        || level_resolution == tiles_per_window_) {
+      break;
+    }
+    surviving_bloated_windows = std::move(next_survivors);
+  }
+
+  for (size_t index = 0; index < recorded.size(); index++) {
+    if (recorded[index]) {
+      result.window_indices.push_back(index);
+    }
+  }
+  return result;
+}
+
 bool TileGrid::writeSvg(
     const std::string& filename,
     const boost::polygon::polygon_90_set_data<int>& metal_shapes,
     int dbu_per_micron,
     const std::vector<double>* planned_fill_areas,
-    bool show_tile_values) const
+    bool show_tile_values,
+    const boost::polygon::polygon_90_set_data<int>* placed_fill_shapes,
+    const std::vector<Polygon90>* fillable_polygons) const
 {
   if (planned_fill_areas != nullptr
       && planned_fill_areas->size() != tiles_.size()) {
@@ -285,6 +441,33 @@ bool TileGrid::writeSvg(
         << boost::polygon::yh(metal) - boost::polygon::yl(metal) << "\"/>\n";
   }
   svg << "  </g>\n";
+  if (fillable_polygons != nullptr) {
+    svg << "  <g fill=\"#43a047\" fill-opacity=\"0.35\" stroke=\"#1f1f1f\" "
+           "stroke-width=\""
+        << std::max(1, stroke_width / 2) << "\">\n";
+    for (const Polygon90& polygon : *fillable_polygons) {
+      svg << "    <path d=\"";
+      writeSvgPolygonPath(svg, polygon);
+      svg << "\" fill-rule=\"evenodd\"/>\n";
+    }
+    svg << "  </g>\n";
+  }
+  Polygon90Set displayed_metal = metal_shapes;
+  if (placed_fill_shapes != nullptr) {
+    Polygon90Set clipped_fill = *placed_fill_shapes & region_polygon;
+    std::vector<Rectangle> fill_rectangles;
+    boost::polygon::get_rectangles(fill_rectangles, clipped_fill);
+    svg << "  <g fill=\"#1976d2\" fill-opacity=\"0.80\" stroke=\"none\">\n";
+    for (const Rectangle& fill : fill_rectangles) {
+      svg << "    <rect x=\"" << boost::polygon::xl(fill) << "\" y=\""
+          << boost::polygon::yl(fill) << "\" width=\""
+          << boost::polygon::xh(fill) - boost::polygon::xl(fill)
+          << "\" height=\""
+          << boost::polygon::yh(fill) - boost::polygon::yl(fill) << "\"/>\n";
+    }
+    svg << "  </g>\n";
+    displayed_metal += *placed_fill_shapes;
+  }
   svg << std::fixed << std::setprecision(3);
   if (show_tile_values) {
     svg << "  <g fill=\"black\" font-family=\"sans-serif\" font-size=\""
@@ -297,7 +480,7 @@ bool TileGrid::writeSvg(
     Polygon90Set tile_polygon;
     tile_polygon.insert(makeRectangle(tile));
     const int64_t metal_area
-        = boost::polygon::area(metal_shapes & tile_polygon);
+        = boost::polygon::area(displayed_metal & tile_polygon);
     total_metal_area += metal_area;
     const double dbu_per_um2
         = static_cast<double>(dbu_per_micron) * dbu_per_micron;

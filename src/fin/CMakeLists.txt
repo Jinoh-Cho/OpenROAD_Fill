@@ -19,6 +19,7 @@ target_sources(fin
     src/FillConfig.cpp
     src/FillGeometry.cpp
     src/FixedDissectionLp.cpp
+    src/MLFixedDissectionLp.cpp
     src/MinVarFill.cpp
     src/FillUtill.cpp
     src/graphics.cpp

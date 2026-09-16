@@ -88,4 +88,42 @@ double Finale::fixedDissectionLp(const char* rules_filename,
                                   svg_filename);
 }
 
+double Finale::fixedDissectionLpFill(const char* rules_filename,
+                                     const odb::Rect& region,
+                                     const odb::Point& origin,
+                                     int window_size,
+                                     int resolution,
+                                     double max_density,
+                                     const char* svg_filename)
+{
+  MinVarFill filler(db_, logger_);
+  return filler.fixedDissectionLpFill(rules_filename,
+                                      region,
+                                      origin,
+                                      window_size,
+                                      resolution,
+                                      max_density,
+                                      svg_filename);
+}
+
+double Finale::multilevelFixedDissectionLp(const char* rules_filename,
+                                           const odb::Rect& region,
+                                           const odb::Point& origin,
+                                           int window_size,
+                                           int resolution,
+                                           double relative_accuracy,
+                                           double max_density,
+                                           const char* svg_filename)
+{
+  MinVarFill filler(db_, logger_);
+  return filler.multilevelFixedDissectionLp(rules_filename,
+                                            region,
+                                            origin,
+                                            window_size,
+                                            resolution,
+                                            relative_accuracy,
+                                            max_density,
+                                            svg_filename);
+}
+
 }  // namespace fin

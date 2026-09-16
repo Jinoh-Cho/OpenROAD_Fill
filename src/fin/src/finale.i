@@ -93,4 +93,44 @@ fixed_dissection_lp_cmd(const char* rules_filename,
       svg_filename);
 }
 
+double
+fixed_dissection_lp_fill_cmd(const char* rules_filename,
+                             const odb::Rect& region,
+                             const odb::Point& origin,
+                             int window_size,
+                             int resolution,
+                             double max_density,
+                             const char* svg_filename)
+{
+  auto* finale = ord::OpenRoad::openRoad()->getFinale();
+  return finale->fixedDissectionLpFill(rules_filename,
+                                       region,
+                                       origin,
+                                       window_size,
+                                       resolution,
+                                       max_density,
+                                       svg_filename);
+}
+
+double
+multilevel_fixed_dissection_lp_cmd(const char* rules_filename,
+                                   const odb::Rect& region,
+                                   const odb::Point& origin,
+                                   int window_size,
+                                   int resolution,
+                                   double relative_accuracy,
+                                   double max_density,
+                                   const char* svg_filename)
+{
+  auto* finale = ord::OpenRoad::openRoad()->getFinale();
+  return finale->multilevelFixedDissectionLp(rules_filename,
+                                             region,
+                                             origin,
+                                             window_size,
+                                             resolution,
+                                             relative_accuracy,
+                                             max_density,
+                                             svg_filename);
+}
+
 %} // inline

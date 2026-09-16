@@ -126,6 +126,62 @@ When `-svg` is supplied, FIN writes three files per configured layer:
   the corresponding window start locations without drawing overlapping
   window labels.
 
+### Fixed-dissection LP fill placement
+
+`fixed_dissection_lp_fill` first generates legal non-OPC fill candidates in
+each tile using the JSON shape and spacing rules. It uses the sum of those
+candidates as the LP capacity, then inserts a subset whose area does not
+exceed the LP solution for that tile. Candidates are inset from tile
+boundaries by the fill spacing, so independently selected candidates in
+neighboring tiles remain legal. This initial implementation deliberately does
+not run a post-placement repair pass and does not yet place OPC fill.
+
+```tcl
+fixed_dissection_lp_fill
+    -rules rules_file
+    [-area {lx ly ux uy}]
+    -window window_size
+    [-origin {x y}]
+    [-resolution resolution]
+    -max_density density
+    [-svg file]
+```
+
+The return value is the total area actually placed, in DBU². If `-svg` is
+given, FIN writes two SVGs per configured layer: `<file>_<layer>_fillable.svg`
+shows the pre-placement fillable regions in green, and `<file>_<layer>.svg`
+shows those regions plus the selected fill rectangles in blue.
+
+### Multilevel fixed-dissection LP analysis
+
+`multilevel_fixed_dissection_lp` implements J40's multilevel density
+analysis before solving the fixed-dissection LP. Starting from a coarse
+dissection, it evaluates standard and bloated windows, retains only windows
+that can still contain a maximum-density window, and doubles the dissection
+resolution until the relative upper/lower bound gap reaches `-accuracy`.
+Only windows examined by this analysis are passed to the LP.
+
+```tcl
+multilevel_fixed_dissection_lp
+    -rules rules_file
+    [-area {lx ly ux uy}]
+    -window window_size
+    [-origin {x y}]
+    [-resolution resolution]
+    -accuracy relative_accuracy
+    -max_density density
+    [-svg file]
+```
+
+`-resolution` is the finest multilevel dissection and must be a power of two.
+`-accuracy` is a relative bound gap in `(0.0, 1.0]`. Like
+`fixed_dissection_lp`, this command plans fill area only; it does not create
+physical fill geometry.
+
+When `-svg` is supplied, FIN writes `<file>_<layer>.svg`. Gray shapes are
+existing metal, tile color encodes existing density from red (low) to green
+(high), and red outlines are the windows retained by multilevel analysis.
+
 ## Source architecture
 
 The FIN module has two fill implementations that share rule parsing and

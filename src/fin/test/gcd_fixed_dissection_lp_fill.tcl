@@ -1,0 +1,28 @@
+# Place fill rectangles from the fixed-dissection LP tile targets.
+set script_dir [file dirname [file normalize [info script]]]
+source "$script_dir/helpers.tcl"
+
+read_lef "$script_dir/sky130hd/sky130hd.tlef"
+read_lef "$script_dir/sky130hd/sky130_fd_sc_hd_merged.lef"
+read_def "$script_dir/gcd_prefill.def"
+
+set svg_file "$script_dir/fixed_dissection_lp_fill.svg"
+set placed_fill [fixed_dissection_lp_fill \
+  -rules "$script_dir/fill.json" \
+  -window 50 \
+  -origin {0 0} \
+  -resolution 4 \
+  -max_density 0.50 \
+  -svg $svg_file]
+
+if {$placed_fill <= 0.0} {
+  error "Fixed-dissection LP fill did not place any fill area."
+}
+if { ![file exists "${svg_file}_met1.svg"] } {
+  error "Fixed-dissection LP fill did not write the placement SVG."
+}
+if { ![file exists "${svg_file}_met1_fillable.svg"] } {
+  error "Fixed-dissection LP fill did not write the fillable-region SVG."
+}
+puts "placed_fill_area=$placed_fill DBU^2"
+puts "pass"

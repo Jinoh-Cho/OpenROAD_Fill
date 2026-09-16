@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "FillConfig.h"
+#include "FillUtill.h"
 #include "odb/db.h"
 #include "odb/geom.h"
 #include "polygon.h"
@@ -48,11 +49,32 @@ class MinVarFill
                            int resolution,
                            double max_density,
                            const char* svg_filename);
+  double fixedDissectionLpFill(const char* rules_filename,
+                               const odb::Rect& region,
+                               const odb::Point& origin,
+                               int window_size,
+                               int resolution,
+                               double max_density,
+                               const char* svg_filename);
+  double multilevelFixedDissectionLp(const char* rules_filename,
+                                     const odb::Rect& region,
+                                     const odb::Point& origin,
+                                     int window_size,
+                                     int resolution,
+                                     double relative_accuracy,
+                                     double max_density,
+                                     const char* svg_filename);
 
   static bool writeFillAreaSvg(const std::string& filename,
                                const Polygon90Set& fill_area,
                                const Polygon90Set& non_fill,
                                const odb::Rect& bounds);
+  static bool writeMLTileDensitySvg(
+      const std::string& filename,
+      const TileGrid& grid,
+      const MultilevelDensityAnalysisResult& analysis,
+      const Polygon90Set& metal_shapes,
+      const odb::Rect& bounds);
 
  private:
   static std::pair<int, int> getSpacing(odb::dbTechLayer* layer,
@@ -69,6 +91,23 @@ class MinVarFill
                           bool needs_opc,
                           Graphics* graphics,
                           Polygon90Set* filled_area = nullptr);
+  static std::vector<Rectangle> makeFillCandidates(
+      const Polygon90& area,
+      odb::dbTechLayer* layer,
+      const FillShapesConfig& config,
+      Graphics* graphics);
+  static std::vector<Rectangle> makeTileFillCandidates(
+      const odb::Rect& tile,
+      const Polygon90Set& non_fill,
+      odb::dbTechLayer* layer,
+      const FillShapesConfig& config,
+      Graphics* graphics,
+      Polygon90Set* fillable_area = nullptr);
+  static Polygon90Set makeTileFillArea(const odb::Rect& tile,
+                                       const Polygon90Set& non_fill,
+                                       odb::dbTechLayer* layer,
+                                       const FillShapesConfig& config,
+                                       Graphics* graphics);
   void fillLayer(odb::dbBlock* block,
                  odb::dbTechLayer* layer,
                  const odb::Rect& fill_bounds);
