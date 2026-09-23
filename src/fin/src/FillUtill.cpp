@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iomanip>
 #include <numeric>
+#include <sstream>
 #include <stdexcept>
 
 #include "boost/polygon/polygon.hpp"
@@ -504,9 +505,8 @@ bool TileGrid::writeSvg(
   }
   svg << std::fixed << std::setprecision(3);
   if (show_tile_values) {
-    svg << "  <g fill=\"#d32f2f\" font-family=\"sans-serif\" font-size=\""
-        << std::max(1, std::min(width, height) / 140)
-        << "\" text-anchor=\"middle\">\n";
+    svg << "  <g fill=\"#d32f2f\" font-family=\"sans-serif\" "
+           "text-anchor=\"middle\">\n";
   }
   int64_t total_metal_area = 0;
   for (size_t tile_index = 0; tile_index < tiles_.size(); tile_index++) {
@@ -534,84 +534,124 @@ bool TileGrid::writeSvg(
         }
       }
       const int text_x = (tile.xMin() + tile.xMax()) / 2;
-      const int text_y = (tile.yMin() + tile.yMax()) / 2;
-      const int font_size = std::max(1, std::min(width, height) / 140);
-      svg << "    <text x=\"" << text_x << "\" y=\"" << text_y - font_size / 2
-          << "\">tile #" << tile_index << "<tspan x=\"" << text_x << "\" dy=\""
-          << font_size << "\">";
       const bool show_fillable_areas = placed_fill_shapes == nullptr
                                        && bloated_non_fill_areas != nullptr
                                        && fillable_region_areas != nullptr;
+      const auto format = [](double value) {
+        std::ostringstream text;
+        text << std::fixed << std::setprecision(3) << value;
+        return text.str();
+      };
+      std::vector<std::string> text_lines;
+      text_lines.push_back("tile #" + std::to_string(tile_index));
       if (show_fillable_areas) {
-        svg << "wire=" << wire_area / dbu_per_um2 << " um2 ("
-            << wire_area / static_cast<double>(tile.area())
-            << ")</tspan><tspan x=\"" << text_x << "\" dy=\"" << font_size
-            << "\">bloat="
-            << bloated_non_fill_areas->at(tile_index) / dbu_per_um2 << " um2 ("
-            << bloated_non_fill_areas->at(tile_index) / tile.area()
-            << ")</tspan><tspan x=\"" << text_x << "\" dy=\"" << font_size
-            << "\">fillable="
-            << fillable_region_areas->at(tile_index) / dbu_per_um2 << " um2 ("
-            << fillable_region_areas->at(tile_index) / tile.area() << ')';
+        text_lines.push_back(
+            "wire=" + format(wire_area / dbu_per_um2) + " um2 ("
+            + format(wire_area / static_cast<double>(tile.area())) + ')');
+        text_lines.push_back(
+            "bloat="
+            + format(bloated_non_fill_areas->at(tile_index) / dbu_per_um2)
+            + " um2 ("
+            + format(bloated_non_fill_areas->at(tile_index) / tile.area())
+            + ')');
+        text_lines.push_back(
+            "fillable="
+            + format(fillable_region_areas->at(tile_index) / dbu_per_um2)
+            + " um2 ("
+            + format(fillable_region_areas->at(tile_index) / tile.area())
+            + ')');
         if (target_tile_densities != nullptr) {
-          svg << "</tspan><tspan x=\"" << text_x << "\" dy=\"" << font_size
-              << "\">target="
-              << target_tile_densities->at(tile_index) * tile.area()
-                     / dbu_per_um2
-              << " um2 (" << target_tile_densities->at(tile_index) << ')';
+          text_lines.push_back(
+              "target="
+              + format(target_tile_densities->at(tile_index) * tile.area()
+                       / dbu_per_um2)
+              + " um2 (" + format(target_tile_densities->at(tile_index)) + ')');
         }
-        svg << "</tspan><tspan x=\"" << text_x << "\" dy=\"" << font_size
-            << "\">tile_area=" << tile.area() / dbu_per_um2 << " um2";
+        text_lines.push_back("tile_area=" + format(tile.area() / dbu_per_um2)
+                             + " um2");
       } else if (target_tile_densities != nullptr) {
         const double actual_density
             = metal_area / static_cast<double>(tile.area());
         const double target_density = target_tile_densities->at(tile_index);
         const double shortage = std::max(target_density - actual_density, 0.0);
-        svg << "target=" << target_density * tile.area() / dbu_per_um2
-            << " um2 (" << target_density << ")</tspan><tspan x=\"" << text_x
-            << "\" dy=\"" << font_size
-            << "\">actual=" << metal_area / dbu_per_um2 << " um2 ("
-            << actual_density << ")</tspan><tspan x=\"" << text_x << "\" dy=\""
-            << font_size
-            << "\">shortage=" << shortage * tile.area() / dbu_per_um2
-            << " um2 (" << shortage << ')';
+        text_lines.push_back(
+            "target=" + format(target_density * tile.area() / dbu_per_um2)
+            + " um2 (" + format(target_density) + ')');
+        text_lines.push_back("actual=" + format(metal_area / dbu_per_um2)
+                             + " um2 (" + format(actual_density) + ')');
+        text_lines.push_back("shortage="
+                             + format(shortage * tile.area() / dbu_per_um2)
+                             + " um2 (" + format(shortage) + ')');
       } else if (planned_fill_areas == nullptr) {
-        svg << metal_area / dbu_per_um2 << " um2";
+        text_lines.push_back(format(metal_area / dbu_per_um2) + " um2");
       } else {
         const double post_fill_density
             = (metal_area + planned_fill_areas->at(tile_index)) / tile.area();
-        svg << "density=" << post_fill_density;
+        text_lines.push_back("density=" + format(post_fill_density));
       }
       if (tile_violation != nullptr) {
         if (tile_violation->reason == TileViolationReason::kCapacity) {
-          svg << "</tspan><tspan x=\"" << text_x << "\" dy=\"" << font_size
-              << "\">reason=capacity required="
-              << tile_violation->required_density
-              << " capacity=" << tile_violation->available_density;
+          text_lines.push_back("reason=capacity required="
+                               + format(tile_violation->required_density)
+                               + " capacity="
+                               + format(tile_violation->available_density));
         } else {
-          svg << "</tspan><tspan x=\"" << text_x << "\" dy=\"" << font_size
-              << "\">reason=discrete target="
-              << tile_violation->required_density
-              << " actual=" << tile_violation->available_density;
+          text_lines.push_back("reason=discrete target="
+                               + format(tile_violation->required_density)
+                               + " actual="
+                               + format(tile_violation->available_density));
         }
       }
       if (placed_fill_shapes != nullptr) {
-        svg << "</tspan><tspan x=\"" << text_x << "\" dy=\"" << font_size
-            << "\">wire=" << wire_area / dbu_per_um2 << " um2 ("
-            << wire_area / static_cast<double>(tile.area())
-            << ")</tspan><tspan x=\"" << text_x << "\" dy=\"" << font_size
-            << "\">fill=" << fill_area / dbu_per_um2 << " um2 ("
-            << fill_area / static_cast<double>(tile.area())
-            << ")</tspan><tspan x=\"" << text_x << "\" dy=\"" << font_size
-            << "\">tile_area=" << tile.area() / dbu_per_um2 << " um2";
+        text_lines.push_back(
+            "wire=" + format(wire_area / dbu_per_um2) + " um2 ("
+            + format(wire_area / static_cast<double>(tile.area())) + ')');
+        text_lines.push_back(
+            "fill=" + format(fill_area / dbu_per_um2) + " um2 ("
+            + format(fill_area / static_cast<double>(tile.area())) + ')');
+        text_lines.push_back("tile_area=" + format(tile.area() / dbu_per_um2)
+                             + " um2");
       } else if (!show_fillable_areas && bloated_non_fill_areas != nullptr) {
-        svg << "</tspan><tspan x=\"" << text_x << "\" dy=\"" << font_size
-            << "\">wire=" << wire_area / dbu_per_um2
-            << " um2</tspan><tspan x=\"" << text_x << "\" dy=\"" << font_size
-            << "\">bloat="
-            << bloated_non_fill_areas->at(tile_index) / dbu_per_um2 << " um2";
+        text_lines.push_back("wire=" + format(wire_area / dbu_per_um2)
+                             + " um2");
+        text_lines.push_back(
+            "bloat="
+            + format(bloated_non_fill_areas->at(tile_index) / dbu_per_um2)
+            + " um2");
       }
-      svg << "</tspan></text>\n";
+      size_t longest_line = 0;
+      for (const std::string& line : text_lines) {
+        longest_line = std::max(longest_line, line.size());
+      }
+      constexpr double kCharacterWidth = 0.60;
+      constexpr double kLineHeight = 1.20;
+      const double global_font_size
+          = std::max(1, std::min(width, height) / 140);
+      const double width_limited_font_size
+          = 0.85 * tile.dx() / (kCharacterWidth * longest_line);
+      const double height_limited_font_size
+          = 0.85 * tile.dy() / (kLineHeight * text_lines.size());
+      const double font_size = std::max(1.0,
+                                        std::min({global_font_size,
+                                                  width_limited_font_size,
+                                                  height_limited_font_size}));
+      const double text_y
+          = (tile.yMin() + tile.yMax()) / 2.0
+            - (text_lines.size() - 1) * kLineHeight * font_size / 2.0;
+      svg << "    <text x=\"" << text_x << "\" y=\"" << text_y
+          << "\" font-size=\"" << font_size << "\">";
+      for (size_t line_index = 0; line_index < text_lines.size();
+           line_index++) {
+        if (line_index != 0) {
+          svg << "<tspan x=\"" << text_x << "\" dy=\""
+              << kLineHeight * font_size << "\">";
+        }
+        svg << text_lines[line_index];
+        if (line_index != 0) {
+          svg << "</tspan>";
+        }
+      }
+      svg << "</text>\n";
     }
   }
   if (show_tile_values) {

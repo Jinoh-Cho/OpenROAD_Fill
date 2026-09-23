@@ -16,12 +16,17 @@ COMPULSORY_TESTS = [
 # Rectangle extraction timings are intentionally nondeterministic.  The test
 # only verifies that the experimental command completes successfully.
 PASSFAIL_TESTS = [
+    "aes_density_fill_svg",
+    "aes_fixed_dissection_lp_fill",
     "gcd_fill_rectangle_benchmark",
+    "gcd_density_fill_svg",
     "gcd_fixed_dissection_lp",
     "gcd_fixed_dissection_lp_fill",
     "gcd_fixed_dissection_lp_fill_infeasible",
     "gcd_multilevel_fixed_dissection_lp",
     "gcd_tile_grid_density",
+    "ibex_density_fill_svg",
+    "ibex_fixed_dissection_lp_fill",
     "min_var_fill",
 ]
 
@@ -34,7 +39,11 @@ filegroup(
     # per test glob patterns below.
     srcs = [
         "fill.json",
+        "aes_prefill.def",
+        "prefill_bench/aes_prefill.def",
         "gcd_prefill.def",
+        "ibex_prefill.def",
+        "prefill_bench/ibex_prefill.def",
         "helpers.tcl",
         "sky130hd/sky130_fd_sc_hd__ff_n40C_1v95.lib",
         "sky130hd/sky130_fd_sc_hd__ss_n40C_1v40.lib",

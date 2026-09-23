@@ -63,11 +63,19 @@ double Finale::tileGridMetalArea(const char* rules_filename,
                                  const odb::Point& origin,
                                  int window_size,
                                  int resolution,
-                                 const char* svg_filename)
+                                 double max_density,
+                                 const char* svg_filename,
+                                 const char* density_report_filename)
 {
   MinVarFill filler(db_, logger_);
-  return filler.tileGridMetalArea(
-      rules_filename, region, origin, window_size, resolution, svg_filename);
+  return filler.tileGridMetalArea(rules_filename,
+                                  region,
+                                  origin,
+                                  window_size,
+                                  resolution,
+                                  max_density,
+                                  svg_filename,
+                                  density_report_filename);
 }
 
 double Finale::fixedDissectionLp(const char* rules_filename,
@@ -95,7 +103,8 @@ double Finale::fixedDissectionLpFill(const char* rules_filename,
                                      int resolution,
                                      double min_tile_density,
                                      double max_density,
-                                     const char* svg_filename)
+                                     const char* svg_filename,
+                                     const char* density_report_filename)
 {
   MinVarFill filler(db_, logger_);
   return filler.fixedDissectionLpFill(rules_filename,
@@ -105,7 +114,8 @@ double Finale::fixedDissectionLpFill(const char* rules_filename,
                                       resolution,
                                       min_tile_density,
                                       max_density,
-                                      svg_filename);
+                                      svg_filename,
+                                      density_report_filename);
 }
 
 double Finale::multilevelFixedDissectionLp(const char* rules_filename,

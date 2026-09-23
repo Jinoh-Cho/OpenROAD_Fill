@@ -66,11 +66,19 @@ tile_grid_metal_area_cmd(const char* rules_filename,
                          const odb::Point& origin,
                          int window_size,
                          int resolution,
-                         const char* svg_filename)
+                         double max_density,
+                         const char* svg_filename,
+                         const char* density_report_filename)
 {
   auto* finale = ord::OpenRoad::openRoad()->getFinale();
-  return finale->tileGridMetalArea(
-      rules_filename, region, origin, window_size, resolution, svg_filename);
+  return finale->tileGridMetalArea(rules_filename,
+                                   region,
+                                   origin,
+                                   window_size,
+                                   resolution,
+                                   max_density,
+                                   svg_filename,
+                                   density_report_filename);
 }
 
 double
@@ -101,7 +109,8 @@ fixed_dissection_lp_fill_cmd(const char* rules_filename,
                              int resolution,
                              double min_tile_density,
                              double max_density,
-                             const char* svg_filename)
+                             const char* svg_filename,
+                             const char* density_report_filename)
 {
   auto* finale = ord::OpenRoad::openRoad()->getFinale();
   return finale->fixedDissectionLpFill(rules_filename,
@@ -111,7 +120,8 @@ fixed_dissection_lp_fill_cmd(const char* rules_filename,
                                        resolution,
                                        min_tile_density,
                                        max_density,
-                                       svg_filename);
+                                       svg_filename,
+                                       density_report_filename);
 }
 
 double

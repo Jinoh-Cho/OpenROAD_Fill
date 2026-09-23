@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <fstream>
 #include <iomanip>
 #include <iterator>
@@ -475,8 +476,31 @@ double MinVarFill::tileGridMetalArea(const char* rules_filename,
                                      const odb::Point& origin,
                                      int window_size,
                                      int resolution,
-                                     const char* svg_filename)
+                                     double max_density,
+                                     const char* svg_filename,
+                                     const char* density_report_filename)
 {
+  struct LayerDensityReport
+  {
+    std::string name;
+    size_t window_count;
+    double min_density;
+    double max_density;
+    double mean_density;
+    double variance;
+    size_t max_violation_window_count;
+    double compute_seconds;
+    double svg_seconds;
+  };
+  using Clock = std::chrono::steady_clock;
+  const auto seconds
+      = [](const Clock::time_point& start, const Clock::time_point& end) {
+          return std::chrono::duration<double>(end - start).count();
+        };
+  auto compute_slice_start = Clock::now();
+  double compute_seconds = 0.0;
+  double svg_seconds = 0.0;
+  std::vector<LayerDensityReport> density_reports;
   const auto layers
       = loadFillLayerConfigs(rules_filename, db_->getTech(), logger_);
   auto* block = db_->getChip()->getBlock();
@@ -486,28 +510,130 @@ double MinVarFill::tileGridMetalArea(const char* rules_filename,
     if (layers.find(layer) == layers.end()) {
       continue;
     }
-    const Polygon90Set layer_shapes = orNonFills(block, layer);
+    const auto layer_start = Clock::now();
+    const Polygon90Set wire_shapes = orNonFills(block, layer);
+    Polygon90Set fill_shapes;
+    for (dbFill* fill : block->getFills()) {
+      if (fill->getTechLayer() != layer) {
+        continue;
+      }
+      Rect fill_rect;
+      fill->getRect(fill_rect);
+      fill_shapes += makeRect(fill_rect.xMin(),
+                              fill_rect.yMin(),
+                              fill_rect.xMax(),
+                              fill_rect.yMax());
+    }
+    Polygon90Set layer_shapes = wire_shapes;
+    layer_shapes += fill_shapes;
     grid.calculateMetalDensities(layer_shapes);
     const double layer_area = grid.totalMetalArea();
     const auto [min_window_density, max_window_density]
         = getWindowDensityRange(grid.windows());
+    double mean_density = 0.0;
+    for (const DensityWindow& window : grid.windows()) {
+      mean_density += window.density;
+    }
+    if (!grid.windows().empty()) {
+      mean_density /= grid.windows().size();
+    }
+    double variance = 0.0;
+    for (const DensityWindow& window : grid.windows()) {
+      const double delta = window.density - mean_density;
+      variance += delta * delta;
+    }
+    if (!grid.windows().empty()) {
+      variance /= grid.windows().size();
+    }
+    const size_t max_violation_window_count = std::count_if(
+        grid.windows().begin(),
+        grid.windows().end(),
+        [max_density](const DensityWindow& window) {
+          return max_density >= 0.0 && window.density > max_density + 1e-9;
+        });
+    const double layer_compute_seconds = seconds(layer_start, Clock::now());
     logger_->info(
         FIN,
         17,
-        "MinVar tile grid: layer={}, tiles={}, windows={}, metal_area={:.0f} "
-        "DBU^2, min_window_density={:.6f}, max_window_density={:.6f}.",
+        "Tile-grid density: layer={}, tiles={}, windows={}, metal_area={:.0f} "
+        "DBU^2, min={:.6f}, max={:.6f}, mean={:.6f}, variance={:.8f}, "
+        "max_density_limit={:.6f}, max_violation_windows={}, "
+        "compute={:.3f}s (SVG excluded).",
         layer->getConstName(),
         grid.tiles().size(),
         grid.windows().size(),
         layer_area,
         min_window_density,
-        max_window_density);
+        max_window_density,
+        mean_density,
+        variance,
+        max_density,
+        max_violation_window_count,
+        layer_compute_seconds);
+    density_reports.push_back({layer->getConstName(),
+                               grid.windows().size(),
+                               min_window_density,
+                               max_window_density,
+                               mean_density,
+                               variance,
+                               max_violation_window_count,
+                               layer_compute_seconds,
+                               0.0});
     total_area += layer_area;
     if (svg_filename != nullptr && svg_filename[0] != '\0') {
+      compute_seconds += seconds(compute_slice_start, Clock::now());
+      const auto svg_start = Clock::now();
       grid.writeSvg(
           std::string(svg_filename) + "_" + layer->getConstName() + ".svg",
-          layer_shapes,
-          db_->getTech()->getDbUnitsPerMicron());
+          wire_shapes,
+          db_->getTech()->getDbUnitsPerMicron(),
+          nullptr,
+          true,
+          &fill_shapes);
+      const double layer_svg_seconds = seconds(svg_start, Clock::now());
+      density_reports.back().svg_seconds = layer_svg_seconds;
+      svg_seconds += layer_svg_seconds;
+      compute_slice_start = Clock::now();
+    }
+  }
+  compute_seconds += seconds(compute_slice_start, Clock::now());
+  logger_->info(FIN,
+                58,
+                "Tile-grid density total runtime (SVG excluded): {:.3f}s; "
+                "SVG rendering: {:.3f}s.",
+                compute_seconds,
+                svg_seconds);
+  if (density_report_filename != nullptr
+      && density_report_filename[0] != '\0') {
+    std::ofstream report(density_report_filename);
+    if (!report) {
+      logger_->warn(FIN,
+                    59,
+                    "Cannot write tile-grid density report to {}.",
+                    density_report_filename);
+    } else {
+      report << std::fixed << std::setprecision(6);
+      report << "{\n  \"runtime_seconds\": {\n"
+             << "    \"density_analysis_excluding_svg\": " << compute_seconds
+             << ",\n"
+             << "    \"svg\": " << svg_seconds << "\n  },\n"
+             << "  \"max_density_limit\": " << max_density << ",\n"
+             << "  \"layers\": [\n";
+      for (size_t index = 0; index < density_reports.size(); index++) {
+        const LayerDensityReport& entry = density_reports[index];
+        report << "    {\"layer\": \"" << entry.name
+               << "\", \"window_count\": " << entry.window_count
+               << ", \"min_density\": " << entry.min_density
+               << ", \"max_density\": " << entry.max_density
+               << ", \"mean_density\": " << entry.mean_density
+               << ", \"variance\": " << entry.variance
+               << ", \"max_violation_window_count\": "
+               << entry.max_violation_window_count
+               << ", \"runtime_seconds\": {\"compute\": "
+               << entry.compute_seconds << ", \"svg\": " << entry.svg_seconds
+               << "}}" << (index + 1 == density_reports.size() ? "\n" : ",\n");
+      }
+      report << "  ]\n}\n";
     }
   }
   return total_area;
@@ -609,8 +735,34 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
                                          int resolution,
                                          double min_tile_density,
                                          double max_density,
-                                         const char* svg_filename)
+                                         const char* svg_filename,
+                                         const char* density_report_filename)
 {
+  struct LayerDensityReport
+  {
+    std::string name;
+    size_t window_count;
+    double min_density;
+    double max_density;
+    double mean_density;
+    double variance;
+    size_t max_violation_window_count;
+    double candidate_seconds;
+    double solve_seconds;
+    double placement_seconds;
+    double compute_seconds;
+    double svg_seconds;
+  };
+  using Clock = std::chrono::steady_clock;
+  const auto seconds
+      = [](const Clock::time_point& start, const Clock::time_point& end) {
+          return std::chrono::duration<double>(end - start).count();
+        };
+  const auto compute_start = Clock::now();
+  auto compute_slice_start = compute_start;
+  double compute_seconds = 0.0;
+  double svg_seconds = 0.0;
+  std::vector<LayerDensityReport> density_reports;
   const auto layers
       = loadFillLayerConfigs(rules_filename, db_->getTech(), logger_);
   auto* block = db_->getChip()->getBlock();
@@ -625,6 +777,7 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
         continue;
       }
       const FillLayerConfig& config = config_it->second;
+      const auto layer_start = Clock::now();
       if (config.has_opc) {
         logger_->warn(FIN,
                       46,
@@ -635,6 +788,7 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
 
       const Polygon90Set layer_shapes = orNonFills(block, layer);
       grid.calculateMetalDensities(layer_shapes);
+      const auto candidates_start = Clock::now();
       const Polygon90Set bloated_non_fill
           = layer_shapes + config.non_opc.space_to_non_fill;
       std::vector<double> bloated_non_fill_areas;
@@ -689,6 +843,7 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
           problem.tile_areas.push_back(tile.area());
           problem.max_fill_areas.push_back(capacity);
         }
+        const auto candidates_end = Clock::now();
 
         for (size_t tile_index = 0; tile_index < grid.tiles().size();
              tile_index++) {
@@ -755,7 +910,9 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
               max_density);
         }
 
+        const auto solve_start = Clock::now();
         const FixedDissectionLpResult result = solveFixedDissectionLp(problem);
+        const auto solve_end = Clock::now();
         if (!result.solved) {
           logger_->error(
               FIN,
@@ -776,6 +933,7 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
                                           / problem.tile_areas[tile_index]);
         }
 
+        const auto placement_start = Clock::now();
         std::vector<double> placed_areas(grid.tiles().size(), 0.0);
         std::vector<Rectangle> selected_fills;
         for (size_t tile_index = 0; tile_index < tile_candidates.size();
@@ -795,29 +953,30 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
         // for (size_t tile_index = 0; tile_index < grid.tiles().size();
         //      tile_index++) {
         //   const double placed_density
-        //       = (problem.feature_areas[tile_index] + placed_areas[tile_index])
+        //       = (problem.feature_areas[tile_index] +
+        //       placed_areas[tile_index])
         //         / problem.tile_areas[tile_index];
-          // if (placed_density < min_tile_density) {
-          //   const Rect& tile = grid.tiles()[tile_index];
-          //   tile_violations.push_back({tile_index,
-          //                              TileViolationReason::kDiscreteCandidate,
-          //                              min_tile_density,
-          //                              placed_density});
-          //   logger_->error(
-          //       FIN,
-          //       52,
-          //       "Fixed-dissection LP fill is infeasible on layer {}: tile {} "
-          //       "({}, {})-({}, {}) reaches density {:.6f}, below requested "
-          //       "minimum density {:.6f} with the available fill candidates.",
-          //       layer->getConstName(),
-          //       tile_index,
-          //       tile.xMin(),
-          //       tile.yMin(),
-          //       tile.xMax(),
-          //       tile.yMax(),
-          //       placed_density,
-          //       min_tile_density);
-          // }
+        // if (placed_density < min_tile_density) {
+        //   const Rect& tile = grid.tiles()[tile_index];
+        //   tile_violations.push_back({tile_index,
+        //                              TileViolationReason::kDiscreteCandidate,
+        //                              min_tile_density,
+        //                              placed_density});
+        //   logger_->error(
+        //       FIN,
+        //       52,
+        //       "Fixed-dissection LP fill is infeasible on layer {}: tile {} "
+        //       "({}, {})-({}, {}) reaches density {:.6f}, below requested "
+        //       "minimum density {:.6f} with the available fill candidates.",
+        //       layer->getConstName(),
+        //       tile_index,
+        //       tile.xMin(),
+        //       tile.yMin(),
+        //       tile.xMax(),
+        //       tile.yMax(),
+        //       placed_density,
+        //       min_tile_density);
+        // }
         // }
 
         const int mask_count = std::max(config.num_masks, 1);
@@ -841,6 +1000,7 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
         }
 
         grid.calculateMetalDensities(post_fill_shapes);
+        const auto placement_end = Clock::now();
         const auto [min_post_fill_density, max_post_fill_density]
             = getWindowDensityRange(grid.windows());
         const double planned_area = std::accumulate(
@@ -877,7 +1037,74 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
             placed_area,
             min_post_fill_density,
             max_post_fill_density);
+        const auto layer_compute_end = Clock::now();
+        const double candidate_seconds
+            = seconds(candidates_start, candidates_end);
+        const double solve_seconds = seconds(solve_start, solve_end);
+        const double placement_seconds
+            = seconds(placement_start, placement_end);
+        const double layer_compute_seconds
+            = seconds(layer_start, layer_compute_end);
+        double mean_density = 0.0;
+        for (const DensityWindow& window : grid.windows()) {
+          mean_density += window.density;
+        }
+        if (!grid.windows().empty()) {
+          mean_density /= grid.windows().size();
+        }
+        double variance = 0.0;
+        for (const DensityWindow& window : grid.windows()) {
+          const double delta = window.density - mean_density;
+          variance += delta * delta;
+        }
+        if (!grid.windows().empty()) {
+          variance /= grid.windows().size();
+        }
+        const size_t max_violation_window_count
+            = std::count_if(grid.windows().begin(),
+                            grid.windows().end(),
+                            [max_density](const DensityWindow& window) {
+                              return window.density > max_density + 1e-9;
+                            });
+        logger_->info(FIN,
+                      54,
+                      "Fixed-dissection LP density: layer={}, windows={}, "
+                      "min={:.6f}, max={:.6f}, mean={:.6f}, "
+                      "variance={:.8f}, max_density_limit={:.6f}, "
+                      "max_violation_windows={}.",
+                      layer->getConstName(),
+                      grid.windows().size(),
+                      min_post_fill_density * 100.0,
+                      max_post_fill_density * 100.0,
+                      mean_density * 100.0,
+                      variance,
+                      max_density,
+                      max_violation_window_count);
+        logger_->info(FIN,
+                      55,
+                      "Fixed-dissection LP runtime (SVG excluded): "
+                      "layer={}, candidates={:.3f}s, lp_solve={:.3f}s, "
+                      "placement={:.3f}s, compute={:.3f}s.",
+                      layer->getConstName(),
+                      candidate_seconds,
+                      solve_seconds,
+                      placement_seconds,
+                      layer_compute_seconds);
+        density_reports.push_back({layer->getConstName(),
+                                   grid.windows().size(),
+                                   min_post_fill_density,
+                                   max_post_fill_density,
+                                   mean_density,
+                                   variance,
+                                   max_violation_window_count,
+                                   candidate_seconds,
+                                   solve_seconds,
+                                   placement_seconds,
+                                   layer_compute_seconds,
+                                   0.0});
         if (svg_filename != nullptr && svg_filename[0] != '\0') {
+          compute_seconds += seconds(compute_slice_start, Clock::now());
+          const auto svg_start = Clock::now();
           const std::string layer_svg
               = std::string(svg_filename) + "_" + layer->getConstName();
           grid.writeSvg(layer_svg + "_fillable.svg",
@@ -904,6 +1131,10 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
                         &window_violations,
                         &bloated_non_fill_areas,
                         &fillable_region_areas);
+          const double layer_svg_seconds = seconds(svg_start, Clock::now());
+          density_reports.back().svg_seconds = layer_svg_seconds;
+          svg_seconds += layer_svg_seconds;
+          compute_slice_start = Clock::now();
         }
         total_placed_area += placed_area;
       } catch (const std::runtime_error& error) {
@@ -918,6 +1149,8 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
         }
         created_fills.resize(layer_fill_start);
         if (svg_filename != nullptr && svg_filename[0] != '\0') {
+          compute_seconds += seconds(compute_slice_start, Clock::now());
+          const auto svg_start = Clock::now();
           const std::string layer_svg
               = std::string(svg_filename) + "_" + layer->getConstName();
           grid.writeSvg(
@@ -947,8 +1180,53 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
               &window_violations,
               &bloated_non_fill_areas,
               &fillable_region_areas);
+          svg_seconds += seconds(svg_start, Clock::now());
+          compute_slice_start = Clock::now();
         }
         continue;
+      }
+    }
+    compute_seconds += seconds(compute_slice_start, Clock::now());
+    logger_->info(FIN,
+                  56,
+                  "Fixed-dissection LP total runtime (SVG excluded): "
+                  "{:.3f}s; SVG rendering: {:.3f}s.",
+                  compute_seconds,
+                  svg_seconds);
+    if (density_report_filename != nullptr
+        && density_report_filename[0] != '\0') {
+      std::ofstream report(density_report_filename);
+      if (!report) {
+        logger_->warn(FIN,
+                      57,
+                      "Cannot write fixed-dissection LP density report to {}.",
+                      density_report_filename);
+      } else {
+        report << std::fixed << std::setprecision(6);
+        report << "{\n  \"runtime_seconds\": {\n"
+               << "    \"compute_excluding_svg\": " << compute_seconds << ",\n"
+               << "    \"svg\": " << svg_seconds << "\n  },\n"
+               << "  \"max_density_limit\": " << max_density << ",\n"
+               << "  \"layers\": [\n";
+        for (size_t index = 0; index < density_reports.size(); index++) {
+          const LayerDensityReport& entry = density_reports[index];
+          report << "    {\"layer\": \"" << entry.name
+                 << "\", \"window_count\": " << entry.window_count
+                 << ", \"min_density\": " << entry.min_density
+                 << ", \"max_density\": " << entry.max_density
+                 << ", \"mean_density\": " << entry.mean_density
+                 << ", \"variance\": " << entry.variance
+                 << ", \"max_violation_window_count\": "
+                 << entry.max_violation_window_count
+                 << ", \"runtime_seconds\": {\"candidates\": "
+                 << entry.candidate_seconds
+                 << ", \"lp_solve\": " << entry.solve_seconds
+                 << ", \"placement\": " << entry.placement_seconds
+                 << ", \"compute\": " << entry.compute_seconds
+                 << ", \"svg\": " << entry.svg_seconds << "}}"
+                 << (index + 1 == density_reports.size() ? "\n" : ",\n");
+        }
+        report << "  ]\n}\n";
       }
     }
     return total_placed_area;

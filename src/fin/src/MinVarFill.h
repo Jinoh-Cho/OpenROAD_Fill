@@ -41,7 +41,9 @@ class MinVarFill
                            const odb::Point& origin,
                            int window_size,
                            int resolution,
-                           const char* svg_filename);
+                           double max_density,
+                           const char* svg_filename,
+                           const char* density_report_filename);
   double fixedDissectionLp(const char* rules_filename,
                            const odb::Rect& region,
                            const odb::Point& origin,
@@ -56,7 +58,8 @@ class MinVarFill
                                int resolution,
                                double min_tile_density,
                                double max_density,
-                               const char* svg_filename);
+                               const char* svg_filename,
+                               const char* density_report_filename);
   double multilevelFixedDissectionLp(const char* rules_filename,
                                      const odb::Rect& region,
                                      const odb::Point& origin,

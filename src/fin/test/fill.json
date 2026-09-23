@@ -68,8 +68,8 @@
             "space_to_outline":         70,
             "non-opc": {
                 "datatype":             0,
-                "width":                [3.00],
-                "height":               [3.00],
+                "width":                [2.00, 1.00, 0.5],
+                "height":               [2.00, 1.00, 0.5],
                 "space_to_fill":        1.6,
                 "space_to_non_fill":    0.3
             }

@@ -113,11 +113,11 @@ proc density_fill_rectangle_extraction_benchmark { args } {
 }
 
 sta::define_cmd_args "tile_grid_metal_area" \
-  {[-rules rules_file] [-area {lx ly ux uy}] -window window_size [-origin {x y}] [-resolution resolution] [-svg file]}
+  {[-rules rules_file] [-area {lx ly ux uy}] -window window_size [-origin {x y}] [-resolution resolution] [-max_density density] [-svg file] [-density_report file]}
 
 proc tile_grid_metal_area { args } {
   sta::parse_key_args "tile_grid_metal_area" args \
-    keys {-rules -area -window -origin -resolution -svg} flags {}
+    keys {-rules -area -window -origin -resolution -max_density -svg -density_report} flags {}
   if { ![info exists keys(-rules)] || ![info exists keys(-window)] } {
     utl::error FIN 18 "The -rules and -window arguments must be specified."
   }
@@ -135,11 +135,23 @@ proc tile_grid_metal_area { args } {
   set origin_y [expr {[$region yMin] + [ord::microns_to_dbu $oy]}]
   set resolution 4
   if { [info exists keys(-resolution)] } { set resolution $keys(-resolution) }
+  set max_density -1.0
+  if { [info exists keys(-max_density)] } {
+    set max_density $keys(-max_density)
+    if { ![string is double -strict $max_density] \
+         || $max_density < 0.0 || $max_density > 1.0 } {
+      utl::error FIN 60 "The -max_density argument must be between 0.0 and 1.0."
+    }
+  }
   set svg_file ""
   if { [info exists keys(-svg)] } { set svg_file $keys(-svg) }
+  set density_report_file ""
+  if { [info exists keys(-density_report)] } {
+    set density_report_file $keys(-density_report)
+  }
   return [fin::tile_grid_metal_area_cmd $keys(-rules) $region \
     [odb::Point x $origin_x $origin_y] \
-    [ord::microns_to_dbu $keys(-window)] $resolution $svg_file]
+    [ord::microns_to_dbu $keys(-window)] $resolution $max_density $svg_file $density_report_file]
 }
 
 sta::define_cmd_args "fixed_dissection_lp" \
@@ -187,11 +199,11 @@ proc fixed_dissection_lp { args } {
 }
 
 sta::define_cmd_args "fixed_dissection_lp_fill" \
-  {[-rules rules_file] [-area {lx ly ux uy}] -window window_size [-origin {x y}] [-resolution resolution] [-min_tile_density density] -max_density density [-svg file]}
+  {[-rules rules_file] [-area {lx ly ux uy}] -window window_size [-origin {x y}] [-resolution resolution] [-min_tile_density density] -max_density density [-svg file] [-density_report file]}
 
 proc fixed_dissection_lp_fill { args } {
   sta::parse_key_args "fixed_dissection_lp_fill" args \
-    keys {-rules -area -window -origin -resolution -min_tile_density -max_density -svg} flags {}
+    keys {-rules -area -window -origin -resolution -min_tile_density -max_density -svg -density_report} flags {}
   foreach required {-rules -window -max_density} {
     if { ![info exists keys($required)] } {
       utl::error FIN 42 "The $required argument must be specified."
@@ -231,10 +243,14 @@ proc fixed_dissection_lp_fill { args } {
   if { [info exists keys(-resolution)] } { set resolution $keys(-resolution) }
   set svg_file ""
   if { [info exists keys(-svg)] } { set svg_file $keys(-svg) }
+  set density_report_file ""
+  if { [info exists keys(-density_report)] } {
+    set density_report_file $keys(-density_report)
+  }
   return [fin::fixed_dissection_lp_fill_cmd $keys(-rules) $region \
     [odb::Point x $origin_x $origin_y] \
     [ord::microns_to_dbu $keys(-window)] $resolution $min_tile_density $keys(-max_density) \
-    $svg_file]
+    $svg_file $density_report_file]
 }
 
 sta::define_cmd_args "multilevel_fixed_dissection_lp" \
