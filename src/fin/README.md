@@ -144,14 +144,20 @@ fixed_dissection_lp_fill
     -window window_size
     [-origin {x y}]
     [-resolution resolution]
-    -max_density density
+    [-min_tile_density density]
+    [-max_tile_density density]
+    [-min_window_density density]
+    [-max_window_density density]
     [-svg file]
 ```
 
-`-min_tile_density` is a hard minimum post-fill density for every tile.
-`-max_density` remains the maximum density for every sliding window. If a
-tile's legal capacity, the sliding-window maximum, or the discrete fill
-candidates cannot satisfy the two constraints together, the command reports
+`-min_tile_density` and `-max_tile_density` are hard post-fill density bounds
+for every tile; `-max_tile_density` defaults to `1.0`.
+`-min_window_density` is an optional hard minimum post-fill density for every
+sliding window. `-max_window_density` remains the maximum density for every sliding
+window and defaults to `1.0`. If a tile's legal capacity, the sliding-window density bounds, or the
+discrete fill candidates cannot satisfy the constraints together, the command
+reports
 an infeasible error and does not retain any fill created by that command.
 
 The return value is the total area actually placed, in DBU². If `-svg` is

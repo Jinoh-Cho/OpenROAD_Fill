@@ -66,6 +66,7 @@ tile_grid_metal_area_cmd(const char* rules_filename,
                          const odb::Point& origin,
                          int window_size,
                          int resolution,
+                         double min_window_density,
                          double max_density,
                          const char* svg_filename,
                          const char* density_report_filename)
@@ -76,6 +77,7 @@ tile_grid_metal_area_cmd(const char* rules_filename,
                                    origin,
                                    window_size,
                                    resolution,
+                                   min_window_density,
                                    max_density,
                                    svg_filename,
                                    density_report_filename);
@@ -108,7 +110,9 @@ fixed_dissection_lp_fill_cmd(const char* rules_filename,
                              int window_size,
                              int resolution,
                              double min_tile_density,
-                             double max_density,
+                             double max_tile_density,
+                             double min_window_density,
+                             double max_window_density,
                              const char* svg_filename,
                              const char* density_report_filename)
 {
@@ -119,9 +123,38 @@ fixed_dissection_lp_fill_cmd(const char* rules_filename,
                                        window_size,
                                        resolution,
                                        min_tile_density,
-                                       max_density,
+                                       max_tile_density,
+                                       min_window_density,
+                                       max_window_density,
                                        svg_filename,
                                        density_report_filename);
+}
+
+double
+fixed_dissection_lp_min_amount_fill_cmd(const char* rules_filename,
+                                        const odb::Rect& region,
+                                        const odb::Point& origin,
+                                        int window_size,
+                                        int resolution,
+                                        double min_tile_density,
+                                        double max_tile_density,
+                                        double min_window_density,
+                                        double max_window_density,
+                                        const char* svg_filename,
+                                        const char* density_report_filename)
+{
+  auto* finale = ord::OpenRoad::openRoad()->getFinale();
+  return finale->fixedDissectionLpMinAmountFill(rules_filename,
+                                                region,
+                                                origin,
+                                                window_size,
+                                                resolution,
+                                                min_tile_density,
+                                                max_tile_density,
+                                                min_window_density,
+                                                max_window_density,
+                                                svg_filename,
+                                                density_report_filename);
 }
 
 double

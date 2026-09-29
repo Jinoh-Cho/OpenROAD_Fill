@@ -89,6 +89,18 @@ filegroup(
 ]
 
 cc_test(
+    name = "fixed_dissection_lp_test",
+    srcs = ["cpp/FixedDissectionLpTest.cpp"],
+    features = ["-layering_check"],  # Tests FIN private algorithm headers.
+    includes = ["../src"],
+    deps = [
+        "//src/fin:fin",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "fill_utill_test",
     srcs = ["cpp/FillUtillTest.cpp"],
     features = ["-layering_check"],  # Tests FIN private algorithm headers.

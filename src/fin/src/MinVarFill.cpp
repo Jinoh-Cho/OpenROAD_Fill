@@ -35,6 +35,77 @@ using odb::dbTechLayer;
 using odb::dbTechLayerDir;
 using odb::Rect;
 
+namespace {
+
+struct WindowDensitySummary
+{
+  double min_density = 0.0;
+  double max_density = 0.0;
+  double mean_density = 0.0;
+  double variance = 0.0;
+  size_t min_violation_count = 0;
+  size_t max_violation_count = 0;
+};
+
+constexpr size_t kWindowDensityHistogramBins = 20;
+using WindowDensityHistogram = std::array<size_t, kWindowDensityHistogramBins>;
+
+WindowDensityHistogram makeWindowDensityHistogram(
+    const std::vector<DensityWindow>& windows)
+{
+  WindowDensityHistogram histogram{};
+  for (const DensityWindow& window : windows) {
+    const double density = std::clamp(window.density, 0.0, 1.0);
+    const size_t bin
+        = std::min(static_cast<size_t>(density * kWindowDensityHistogramBins),
+                   kWindowDensityHistogramBins - 1);
+    histogram[bin]++;
+  }
+  return histogram;
+}
+
+void writeWindowDensityHistogram(std::ostream& report,
+                                 const WindowDensityHistogram& histogram)
+{
+  report << ", \"window_density_histogram\": {\"bin_width\": "
+         << 1.0 / kWindowDensityHistogramBins << ", \"counts\": [";
+  for (size_t bin = 0; bin < histogram.size(); bin++) {
+    report << histogram[bin] << (bin + 1 == histogram.size() ? "]}" : ", ");
+  }
+}
+
+WindowDensitySummary summarizeWindowDensities(
+    const std::vector<DensityWindow>& windows,
+    double min_density_limit,
+    double max_density_limit)
+{
+  WindowDensitySummary summary;
+  if (windows.empty()) {
+    return summary;
+  }
+
+  summary.min_density = windows.front().density;
+  summary.max_density = windows.front().density;
+  for (const DensityWindow& window : windows) {
+    summary.min_density = std::min(summary.min_density, window.density);
+    summary.max_density = std::max(summary.max_density, window.density);
+    summary.mean_density += window.density;
+    summary.min_violation_count += min_density_limit >= 0.0
+                                   && window.density < min_density_limit - 1e-9;
+    summary.max_violation_count += max_density_limit >= 0.0
+                                   && window.density > max_density_limit + 1e-9;
+  }
+  summary.mean_density /= windows.size();
+  for (const DensityWindow& window : windows) {
+    const double delta = window.density - summary.mean_density;
+    summary.variance += delta * delta;
+  }
+  summary.variance /= windows.size();
+  return summary;
+}
+
+}  // namespace
+
 std::pair<int, int> MinVarFill::getSpacing(dbTechLayer* layer,
                                            const FillShapesConfig& cfg)
 {
@@ -476,6 +547,7 @@ double MinVarFill::tileGridMetalArea(const char* rules_filename,
                                      const odb::Point& origin,
                                      int window_size,
                                      int resolution,
+                                     double min_window_density,
                                      double max_density,
                                      const char* svg_filename,
                                      const char* density_report_filename)
@@ -488,7 +560,9 @@ double MinVarFill::tileGridMetalArea(const char* rules_filename,
     double max_density;
     double mean_density;
     double variance;
+    size_t min_violation_window_count;
     size_t max_violation_window_count;
+    WindowDensityHistogram histogram;
     double compute_seconds;
     double svg_seconds;
   };
@@ -528,55 +602,39 @@ double MinVarFill::tileGridMetalArea(const char* rules_filename,
     layer_shapes += fill_shapes;
     grid.calculateMetalDensities(layer_shapes);
     const double layer_area = grid.totalMetalArea();
-    const auto [min_window_density, max_window_density]
-        = getWindowDensityRange(grid.windows());
-    double mean_density = 0.0;
-    for (const DensityWindow& window : grid.windows()) {
-      mean_density += window.density;
-    }
-    if (!grid.windows().empty()) {
-      mean_density /= grid.windows().size();
-    }
-    double variance = 0.0;
-    for (const DensityWindow& window : grid.windows()) {
-      const double delta = window.density - mean_density;
-      variance += delta * delta;
-    }
-    if (!grid.windows().empty()) {
-      variance /= grid.windows().size();
-    }
-    const size_t max_violation_window_count = std::count_if(
-        grid.windows().begin(),
-        grid.windows().end(),
-        [max_density](const DensityWindow& window) {
-          return max_density >= 0.0 && window.density > max_density + 1e-9;
-        });
+    const WindowDensitySummary density_summary = summarizeWindowDensities(
+        grid.windows(), min_window_density, max_density);
     const double layer_compute_seconds = seconds(layer_start, Clock::now());
     logger_->info(
         FIN,
         17,
         "Tile-grid density: layer={}, tiles={}, windows={}, metal_area={:.0f} "
         "DBU^2, min={:.6f}, max={:.6f}, mean={:.6f}, variance={:.8f}, "
+        "min_window_density_limit={:.6f}, min_violation_windows={}, "
         "max_density_limit={:.6f}, max_violation_windows={}, "
         "compute={:.3f}s (SVG excluded).",
         layer->getConstName(),
         grid.tiles().size(),
         grid.windows().size(),
         layer_area,
+        density_summary.min_density,
+        density_summary.max_density,
+        density_summary.mean_density,
+        density_summary.variance,
         min_window_density,
-        max_window_density,
-        mean_density,
-        variance,
+        density_summary.min_violation_count,
         max_density,
-        max_violation_window_count,
+        density_summary.max_violation_count,
         layer_compute_seconds);
     density_reports.push_back({layer->getConstName(),
                                grid.windows().size(),
-                               min_window_density,
-                               max_window_density,
-                               mean_density,
-                               variance,
-                               max_violation_window_count,
+                               density_summary.min_density,
+                               density_summary.max_density,
+                               density_summary.mean_density,
+                               density_summary.variance,
+                               density_summary.min_violation_count,
+                               density_summary.max_violation_count,
+                               makeWindowDensityHistogram(grid.windows()),
                                layer_compute_seconds,
                                0.0});
     total_area += layer_area;
@@ -617,6 +675,8 @@ double MinVarFill::tileGridMetalArea(const char* rules_filename,
              << "    \"density_analysis_excluding_svg\": " << compute_seconds
              << ",\n"
              << "    \"svg\": " << svg_seconds << "\n  },\n"
+             << "  \"min_window_density_limit\": " << min_window_density
+             << ",\n"
              << "  \"max_density_limit\": " << max_density << ",\n"
              << "  \"layers\": [\n";
       for (size_t index = 0; index < density_reports.size(); index++) {
@@ -627,11 +687,15 @@ double MinVarFill::tileGridMetalArea(const char* rules_filename,
                << ", \"max_density\": " << entry.max_density
                << ", \"mean_density\": " << entry.mean_density
                << ", \"variance\": " << entry.variance
+               << ", \"min_violation_window_count\": "
+               << entry.min_violation_window_count
                << ", \"max_violation_window_count\": "
                << entry.max_violation_window_count
                << ", \"runtime_seconds\": {\"compute\": "
                << entry.compute_seconds << ", \"svg\": " << entry.svg_seconds
-               << "}}" << (index + 1 == density_reports.size() ? "\n" : ",\n");
+               << "}";
+        writeWindowDensityHistogram(report, entry.histogram);
+        report << "}" << (index + 1 == density_reports.size() ? "\n" : ",\n");
       }
       report << "  ]\n}\n";
     }
@@ -662,7 +726,7 @@ double MinVarFill::fixedDissectionLp(const char* rules_filename,
     const auto [min_window_density, max_window_density]
         = getWindowDensityRange(grid.windows());
     FixedDissectionLpProblem problem;
-    problem.max_density = max_density;
+    problem.max_window_density = max_density;
     problem.feature_areas = grid.metalAreas();
     problem.windows = grid.windowTileIndices();
     problem.tile_areas.reserve(grid.tiles().size());
@@ -734,19 +798,92 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
                                          int window_size,
                                          int resolution,
                                          double min_tile_density,
-                                         double max_density,
+                                         double max_tile_density,
+                                         double min_window_density,
+                                         double max_window_density,
                                          const char* svg_filename,
                                          const char* density_report_filename)
+{
+  return fixedDissectionLpFillImpl(
+      rules_filename,
+      region,
+      origin,
+      window_size,
+      resolution,
+      min_tile_density,
+      max_tile_density,
+      min_window_density,
+      max_window_density,
+      svg_filename,
+      density_report_filename,
+      FixedDissectionLpObjective::kMaximizeMinimumWindowArea);
+}
+
+double MinVarFill::fixedDissectionLpMinAmountFill(
+    const char* rules_filename,
+    const Rect& region,
+    const odb::Point& origin,
+    int window_size,
+    int resolution,
+    double min_tile_density,
+    double max_tile_density,
+    double min_window_density,
+    double max_window_density,
+    const char* svg_filename,
+    const char* density_report_filename)
+{
+  return fixedDissectionLpFillImpl(
+      rules_filename,
+      region,
+      origin,
+      window_size,
+      resolution,
+      min_tile_density,
+      max_tile_density,
+      min_window_density,
+      max_window_density,
+      svg_filename,
+      density_report_filename,
+      FixedDissectionLpObjective::kMinimizeTotalFillArea);
+}
+
+double MinVarFill::fixedDissectionLpFillImpl(
+    const char* rules_filename,
+    const Rect& region,
+    const odb::Point& origin,
+    int window_size,
+    int resolution,
+    double min_tile_density,
+    double max_tile_density,
+    double min_window_density,
+    double max_window_density,
+    const char* svg_filename,
+    const char* density_report_filename,
+    FixedDissectionLpObjective objective)
 {
   struct LayerDensityReport
   {
     std::string name;
+    double planned_fill_area;
+    double placed_fill_area;
     size_t window_count;
     double min_density;
     double max_density;
     double mean_density;
     double variance;
+    size_t min_violation_window_count;
     size_t max_violation_window_count;
+    WindowDensityHistogram histogram;
+    bool solved;
+    std::string infeasibility_reason;
+    size_t diagnostic_window_index;
+    Rect diagnostic_window_bounds;
+    double diagnostic_current_density;
+    double diagnostic_required_fill_area;
+    double diagnostic_max_legal_fill_area;
+    double diagnostic_fill_budget;
+    size_t tile_violation_count;
+    size_t window_violation_count;
     double candidate_seconds;
     double solve_seconds;
     double placement_seconds;
@@ -810,10 +947,25 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
       std::vector<TileViolation> tile_violations;
       std::vector<WindowViolation> window_violations;
       const size_t layer_fill_start = created_fills.size();
+      std::string infeasibility_reason;
+      size_t diagnostic_window_index = 0;
+      Rect diagnostic_window_bounds;
+      double diagnostic_current_density = 0.0;
+      double diagnostic_required_fill_area = 0.0;
+      double diagnostic_max_legal_fill_area = 0.0;
+      double diagnostic_fill_budget = 0.0;
       try {
         FixedDissectionLpProblem problem;
-        problem.max_density = max_density;
+        problem.max_window_density = max_window_density;
         problem.min_tile_density = min_tile_density;
+        problem.max_tile_density = max_tile_density;
+        // Placement rounds a continuous LP area down to legal rectangles.
+        // Keep a small guard only for the minimum-amount objective so the
+        // placed, rather than merely planned, fill meets the user limit.
+        problem.min_window_density
+            = objective == FixedDissectionLpObjective::kMinimizeTotalFillArea
+                  ? std::min(min_window_density + 5e-4, max_window_density)
+                  : min_window_density;
         problem.feature_areas = grid.metalAreas();
         problem.windows = grid.windowTileIndices();
         problem.tile_areas.reserve(grid.tiles().size());
@@ -880,49 +1032,95 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
 
         for (size_t window_index = 0; window_index < problem.windows.size();
              window_index++) {
-          double required_fill_area = 0.0;
+          double tile_minimum_fill_area = 0.0;
+          double maximum_legal_fill_area = 0.0;
           double window_area = 0.0;
           double feature_area = 0.0;
           for (const size_t tile_index : problem.windows[window_index]) {
-            required_fill_area
+            tile_minimum_fill_area
                 += std::max(min_tile_density * problem.tile_areas[tile_index]
                                 - problem.feature_areas[tile_index],
+                            0.0);
+            const double max_tile_fill_area
+                = max_tile_density * problem.tile_areas[tile_index]
+                  - problem.feature_areas[tile_index];
+            maximum_legal_fill_area
+                += std::max(std::min(problem.max_fill_areas[tile_index],
+                                     max_tile_fill_area),
                             0.0);
             window_area += problem.tile_areas[tile_index];
             feature_area += problem.feature_areas[tile_index];
           }
           const double fill_budget
-              = std::max(max_density * window_area - feature_area, 0.0);
-          if (required_fill_area > fill_budget) {
+              = std::max(max_window_density * window_area - feature_area, 0.0);
+          const double window_minimum_fill_area = std::max(
+              problem.min_window_density * window_area - feature_area, 0.0);
+          const double required_fill_area
+              = std::max(tile_minimum_fill_area, window_minimum_fill_area);
+          if (required_fill_area > fill_budget
+              || required_fill_area > maximum_legal_fill_area) {
             window_violations.push_back(
                 {window_index, required_fill_area, fill_budget});
+            if (infeasibility_reason.empty()) {
+              const DensityWindow& window = grid.windows()[window_index];
+              infeasibility_reason
+                  = required_fill_area > fill_budget
+                        ? "window_lower_bound_exceeds_upper_bound"
+                        : "window_lower_bound_exceeds_legal_capacity";
+              diagnostic_window_index = window_index;
+              diagnostic_window_bounds = window.bounds;
+              diagnostic_current_density = window.density;
+              diagnostic_required_fill_area = required_fill_area;
+              diagnostic_max_legal_fill_area = maximum_legal_fill_area;
+              diagnostic_fill_budget = fill_budget;
+            }
           }
         }
         if (!window_violations.empty()) {
-          logger_->error(
-              FIN,
-              51,
-              "Fixed-dissection LP fill is infeasible on layer {}: "
-              "-min_tile_density {:.6f} and -max_density {:.6f} cannot "
-              "be satisfied simultaneously.",
-              layer->getConstName(),
-              min_tile_density,
-              max_density);
+          logger_->error(FIN,
+                         51,
+                         "Fixed-dissection LP fill is infeasible on layer {}: "
+                         "-min_tile_density {:.6f}, -max_tile_density {:.6f}, "
+                         "-min_window_density {:.6f}, and "
+                         "-max_window_density {:.6f} cannot "
+                         "be satisfied simultaneously; {} at window {} "
+                         "({}, {})-({}, {}): current_density={:.6f}, "
+                         "required_fill={:.0f}, legal_fill_capacity={:.0f}, "
+                         "window_fill_budget={:.0f}.",
+                         layer->getConstName(),
+                         min_tile_density,
+                         max_tile_density,
+                         min_window_density,
+                         max_window_density,
+                         infeasibility_reason,
+                         diagnostic_window_index,
+                         diagnostic_window_bounds.xMin(),
+                         diagnostic_window_bounds.yMin(),
+                         diagnostic_window_bounds.xMax(),
+                         diagnostic_window_bounds.yMax(),
+                         diagnostic_current_density,
+                         diagnostic_required_fill_area,
+                         diagnostic_max_legal_fill_area,
+                         diagnostic_fill_budget);
         }
 
         const auto solve_start = Clock::now();
-        const FixedDissectionLpResult result = solveFixedDissectionLp(problem);
+        const FixedDissectionLpResult result
+            = solveFixedDissectionLp(problem, objective);
         const auto solve_end = Clock::now();
         if (!result.solved) {
-          logger_->error(
-              FIN,
-              51,
-              "Fixed-dissection LP fill is infeasible on layer {}: "
-              "-min_tile_density {:.6f} and -max_density {:.6f} cannot "
-              "be satisfied simultaneously.",
-              layer->getConstName(),
-              min_tile_density,
-              max_density);
+          logger_->error(FIN,
+                         51,
+                         "Fixed-dissection LP fill is infeasible on layer {}: "
+                         "-min_tile_density {:.6f}, -max_tile_density {:.6f}, "
+                         "-min_window_density {:.6f}, and "
+                         "-max_window_density {:.6f} cannot "
+                         "be satisfied simultaneously.",
+                         layer->getConstName(),
+                         min_tile_density,
+                         max_tile_density,
+                         min_window_density,
+                         max_window_density);
         }
 
         target_tile_densities.reserve(grid.tiles().size());
@@ -1045,41 +1243,26 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
             = seconds(placement_start, placement_end);
         const double layer_compute_seconds
             = seconds(layer_start, layer_compute_end);
-        double mean_density = 0.0;
-        for (const DensityWindow& window : grid.windows()) {
-          mean_density += window.density;
-        }
-        if (!grid.windows().empty()) {
-          mean_density /= grid.windows().size();
-        }
-        double variance = 0.0;
-        for (const DensityWindow& window : grid.windows()) {
-          const double delta = window.density - mean_density;
-          variance += delta * delta;
-        }
-        if (!grid.windows().empty()) {
-          variance /= grid.windows().size();
-        }
-        const size_t max_violation_window_count
-            = std::count_if(grid.windows().begin(),
-                            grid.windows().end(),
-                            [max_density](const DensityWindow& window) {
-                              return window.density > max_density + 1e-9;
-                            });
+        const WindowDensitySummary density_summary = summarizeWindowDensities(
+            grid.windows(), min_window_density, max_window_density);
         logger_->info(FIN,
                       54,
                       "Fixed-dissection LP density: layer={}, windows={}, "
                       "min={:.6f}, max={:.6f}, mean={:.6f}, "
-                      "variance={:.8f}, max_density_limit={:.6f}, "
+                      "variance={:.8f}, min_window_density_limit={:.6f}, "
+                      "min_violation_windows={}, "
+                      "max_window_density_limit={:.6f}, "
                       "max_violation_windows={}.",
                       layer->getConstName(),
                       grid.windows().size(),
                       min_post_fill_density * 100.0,
                       max_post_fill_density * 100.0,
-                      mean_density * 100.0,
-                      variance,
-                      max_density,
-                      max_violation_window_count);
+                      density_summary.mean_density * 100.0,
+                      density_summary.variance,
+                      min_window_density,
+                      density_summary.min_violation_count,
+                      max_window_density,
+                      density_summary.max_violation_count);
         logger_->info(FIN,
                       55,
                       "Fixed-dissection LP runtime (SVG excluded): "
@@ -1091,12 +1274,26 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
                       placement_seconds,
                       layer_compute_seconds);
         density_reports.push_back({layer->getConstName(),
+                                   planned_area,
+                                   placed_area,
                                    grid.windows().size(),
                                    min_post_fill_density,
                                    max_post_fill_density,
-                                   mean_density,
-                                   variance,
-                                   max_violation_window_count,
+                                   density_summary.mean_density,
+                                   density_summary.variance,
+                                   density_summary.min_violation_count,
+                                   density_summary.max_violation_count,
+                                   makeWindowDensityHistogram(grid.windows()),
+                                   true,
+                                   "",
+                                   0,
+                                   Rect(),
+                                   0.0,
+                                   0.0,
+                                   0.0,
+                                   0.0,
+                                   0,
+                                   0,
                                    candidate_seconds,
                                    solve_seconds,
                                    placement_seconds,
@@ -1148,6 +1345,36 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
           dbFill::destroy(created_fills[index]);
         }
         created_fills.resize(layer_fill_start);
+        const WindowDensitySummary density_summary = summarizeWindowDensities(
+            grid.windows(), min_window_density, max_window_density);
+        density_reports.push_back({layer->getConstName(),
+                                   0.0,
+                                   0.0,
+                                   grid.windows().size(),
+                                   density_summary.min_density,
+                                   density_summary.max_density,
+                                   density_summary.mean_density,
+                                   density_summary.variance,
+                                   density_summary.min_violation_count,
+                                   density_summary.max_violation_count,
+                                   makeWindowDensityHistogram(grid.windows()),
+                                   false,
+                                   infeasibility_reason.empty()
+                                       ? "lp_infeasible"
+                                       : infeasibility_reason,
+                                   diagnostic_window_index,
+                                   diagnostic_window_bounds,
+                                   diagnostic_current_density,
+                                   diagnostic_required_fill_area,
+                                   diagnostic_max_legal_fill_area,
+                                   diagnostic_fill_budget,
+                                   tile_violations.size(),
+                                   window_violations.size(),
+                                   0.0,
+                                   0.0,
+                                   0.0,
+                                   seconds(layer_start, Clock::now()),
+                                   0.0});
         if (svg_filename != nullptr && svg_filename[0] != '\0') {
           compute_seconds += seconds(compute_slice_start, Clock::now());
           const auto svg_start = Clock::now();
@@ -1206,19 +1433,51 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
         report << "{\n  \"runtime_seconds\": {\n"
                << "    \"compute_excluding_svg\": " << compute_seconds << ",\n"
                << "    \"svg\": " << svg_seconds << "\n  },\n"
-               << "  \"max_density_limit\": " << max_density << ",\n"
+               << "  \"min_window_density_limit\": " << min_window_density
+               << ",\n"
+               << "  \"max_window_density_limit\": " << max_window_density
+               << ",\n"
                << "  \"layers\": [\n";
         for (size_t index = 0; index < density_reports.size(); index++) {
           const LayerDensityReport& entry = density_reports[index];
           report << "    {\"layer\": \"" << entry.name
-                 << "\", \"window_count\": " << entry.window_count
+                 << "\", \"planned_fill_area\": " << entry.planned_fill_area
+                 << ", \"placed_fill_area\": " << entry.placed_fill_area
+                 << ", \"window_count\": " << entry.window_count
                  << ", \"min_density\": " << entry.min_density
                  << ", \"max_density\": " << entry.max_density
                  << ", \"mean_density\": " << entry.mean_density
                  << ", \"variance\": " << entry.variance
+                 << ", \"min_violation_window_count\": "
+                 << entry.min_violation_window_count
                  << ", \"max_violation_window_count\": "
-                 << entry.max_violation_window_count
-                 << ", \"runtime_seconds\": {\"candidates\": "
+                 << entry.max_violation_window_count;
+          writeWindowDensityHistogram(report, entry.histogram);
+          report << ", \"solved\": " << (entry.solved ? "true" : "false")
+                 << ", \"status\": \""
+                 << (entry.solved ? "solved" : "infeasible") << "\""
+                 << ", \"tile_violation_count\": " << entry.tile_violation_count
+                 << ", \"window_violation_count\": "
+                 << entry.window_violation_count << ", \"failure\": ";
+          if (entry.solved) {
+            report << "null";
+          } else {
+            report << "{\"reason\": \"" << entry.infeasibility_reason
+                   << "\", \"window_index\": " << entry.diagnostic_window_index
+                   << ", \"bounds\": [" << entry.diagnostic_window_bounds.xMin()
+                   << ", " << entry.diagnostic_window_bounds.yMin() << ", "
+                   << entry.diagnostic_window_bounds.xMax() << ", "
+                   << entry.diagnostic_window_bounds.yMax()
+                   << "], \"current_density\": "
+                   << entry.diagnostic_current_density
+                   << ", \"required_fill_area\": "
+                   << entry.diagnostic_required_fill_area
+                   << ", \"max_legal_fill_area\": "
+                   << entry.diagnostic_max_legal_fill_area
+                   << ", \"max_window_fill_budget\": "
+                   << entry.diagnostic_fill_budget << "}";
+          }
+          report << ", \"runtime_seconds\": {\"candidates\": "
                  << entry.candidate_seconds
                  << ", \"lp_solve\": " << entry.solve_seconds
                  << ", \"placement\": " << entry.placement_seconds

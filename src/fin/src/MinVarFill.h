@@ -9,6 +9,7 @@
 
 #include "FillConfig.h"
 #include "FillUtill.h"
+#include "FixedDissectionLp.h"
 #include "odb/db.h"
 #include "odb/geom.h"
 #include "polygon.h"
@@ -41,6 +42,7 @@ class MinVarFill
                            const odb::Point& origin,
                            int window_size,
                            int resolution,
+                           double min_window_density,
                            double max_density,
                            const char* svg_filename,
                            const char* density_report_filename);
@@ -57,9 +59,22 @@ class MinVarFill
                                int window_size,
                                int resolution,
                                double min_tile_density,
-                               double max_density,
+                               double max_tile_density,
+                               double min_window_density,
+                               double max_window_density,
                                const char* svg_filename,
                                const char* density_report_filename);
+  double fixedDissectionLpMinAmountFill(const char* rules_filename,
+                                        const odb::Rect& region,
+                                        const odb::Point& origin,
+                                        int window_size,
+                                        int resolution,
+                                        double min_tile_density,
+                                        double max_tile_density,
+                                        double min_window_density,
+                                        double max_window_density,
+                                        const char* svg_filename,
+                                        const char* density_report_filename);
   double multilevelFixedDissectionLp(const char* rules_filename,
                                      const odb::Rect& region,
                                      const odb::Point& origin,
@@ -81,6 +96,18 @@ class MinVarFill
       const odb::Rect& bounds);
 
  private:
+  double fixedDissectionLpFillImpl(const char* rules_filename,
+                                   const odb::Rect& region,
+                                   const odb::Point& origin,
+                                   int window_size,
+                                   int resolution,
+                                   double min_tile_density,
+                                   double max_tile_density,
+                                   double min_window_density,
+                                   double max_window_density,
+                                   const char* svg_filename,
+                                   const char* density_report_filename,
+                                   FixedDissectionLpObjective objective);
   static std::pair<int, int> getSpacing(odb::dbTechLayer* layer,
                                         const FillShapesConfig& config);
   static void prune(Polygon90Set& fill_area,

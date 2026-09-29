@@ -12,8 +12,10 @@ namespace fin {
 // DBU^2).  A window contains indices into the three per-tile vectors.
 struct FixedDissectionLpProblem
 {
-  double max_density;
+  double max_window_density = 1.0;
   double min_tile_density = 0.0;
+  double max_tile_density = 1.0;
+  double min_window_density = 0.0;
   std::vector<double> tile_areas;
   std::vector<double> feature_areas;
   std::vector<double> max_fill_areas;
@@ -27,10 +29,18 @@ struct FixedDissectionLpResult
   std::vector<double> fill_areas;
 };
 
+enum class FixedDissectionLpObjective
+{
+  kMaximizeMinimumWindowArea,
+  kMinimizeTotalFillArea
+};
+
 // Solve J40 equations (2)-(5): maximize the minimum post-fill window area,
-// subject to tile fill capacities and a maximum density in every window.
+// subject to tile fill capacities and density bounds in every window.
 // Throws std::invalid_argument when the problem dimensions are inconsistent.
 FixedDissectionLpResult solveFixedDissectionLp(
-    const FixedDissectionLpProblem& problem);
+    const FixedDissectionLpProblem& problem,
+    FixedDissectionLpObjective objective
+    = FixedDissectionLpObjective::kMaximizeMinimumWindowArea);
 
 }  // namespace fin
