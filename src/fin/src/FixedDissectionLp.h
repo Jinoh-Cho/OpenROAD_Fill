@@ -26,6 +26,7 @@ struct FixedDissectionLpResult
 {
   bool solved = false;
   double min_window_area = 0.0;
+  double lip_value = 0.0;
   std::vector<double> fill_areas;
 };
 

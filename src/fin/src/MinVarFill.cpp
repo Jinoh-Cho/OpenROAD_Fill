@@ -18,6 +18,7 @@
 #include "FillGeometry.h"
 #include "FillUtill.h"
 #include "FixedDissectionLp.h"
+#include "LipLpFill.h"
 #include "MLFixedDissectionLp.h"
 #include "graphics.h"
 #include "polygon.h"
@@ -542,15 +543,18 @@ void MinVarFill::benchmarkRectangleExtraction(const char* rules_filename,
                 total_seconds / runs);
 }
 
-double MinVarFill::tileGridMetalArea(const char* rules_filename,
-                                     const Rect& region,
-                                     const odb::Point& origin,
-                                     int window_size,
-                                     int resolution,
-                                     double min_window_density,
-                                     double max_density,
-                                     const char* svg_filename,
-                                     const char* density_report_filename)
+double MinVarFill::tileGridMetalArea(
+    const char* rules_filename,
+    const Rect& region,
+    const odb::Point& origin,
+    int window_size,
+    int resolution,
+    double min_window_density,
+    double max_density,
+    const char* svg_filename,
+    const char* density_report_filename,
+    const char* floating_density_profile_filename,
+    const char* floating_density_algorithm)
 {
   struct LayerDensityReport
   {
@@ -574,6 +578,16 @@ double MinVarFill::tileGridMetalArea(const char* rules_filename,
   auto compute_slice_start = Clock::now();
   double compute_seconds = 0.0;
   double svg_seconds = 0.0;
+  const std::string algorithm = floating_density_algorithm == nullptr
+                                    ? "alg3"
+                                    : floating_density_algorithm;
+  if (algorithm != "alg2" && algorithm != "alg3") {
+    logger_->error(FIN,
+                   67,
+                   "Unknown floating density algorithm '{}'; expected alg2 "
+                   "or alg3.",
+                   algorithm);
+  }
   std::vector<LayerDensityReport> density_reports;
   const auto layers
       = loadFillLayerConfigs(rules_filename, db_->getTech(), logger_);
@@ -637,6 +651,69 @@ double MinVarFill::tileGridMetalArea(const char* rules_filename,
                                makeWindowDensityHistogram(grid.windows()),
                                layer_compute_seconds,
                                0.0});
+    if (floating_density_profile_filename != nullptr
+        && floating_density_profile_filename[0] != '\0') {
+      std::vector<Rectangle> metal_rectangles;
+      get_rectangles(metal_rectangles, layer_shapes);
+      std::vector<Rect> rectangles;
+      rectangles.reserve(metal_rectangles.size());
+      for (const Rectangle& rectangle : metal_rectangles) {
+        rectangles.emplace_back(
+            xl(rectangle), yl(rectangle), xh(rectangle), yh(rectangle));
+      }
+      const FloatingDensityResult floating_density
+          = algorithm == "alg2"
+                ? analyzeFloatingDensityAlg2(rectangles, region, window_size)
+                : analyzeFloatingDensityAlg3(rectangles, region, window_size);
+      const std::string profile_filename
+          = std::string(floating_density_profile_filename) + "_"
+            + layer->getConstName() + ".json";
+      std::ofstream profile(profile_filename);
+      if (!profile) {
+        logger_->warn(FIN,
+                      65,
+                      "Cannot write floating-density profile to {}.",
+                      profile_filename);
+      } else {
+        profile << std::fixed << std::setprecision(9);
+        profile << "{\n  \"layer\": \"" << layer->getConstName()
+                << "\",\n  \"algorithm\": \"" << algorithm
+                << "\",\n  \"min_density\": " << floating_density.min_density
+                << ",\n  \"max_density\": " << floating_density.max_density
+                << ",\n  \"min_density_limit\": " << min_window_density;
+        if (max_density >= 0.0) {
+          profile << ",\n  \"max_density_limit\": " << max_density;
+        }
+        profile << ",\n  \"profiles\": [\n";
+        for (size_t profile_index = 0;
+             profile_index < floating_density.profiles.size();
+             profile_index++) {
+          const FloatingDensityResult::Profile& entry
+              = floating_density.profiles[profile_index];
+          profile << "    {\"label\": \"window y=" << entry.y
+                  << "\", \"y\": " << entry.y << ", \"points\": [";
+          for (size_t point_index = 0; point_index < entry.points.size();
+               point_index++) {
+            const auto& point = entry.points[point_index];
+            profile << "[" << point.first << ", " << point.second << "]"
+                    << (point_index + 1 == entry.points.size() ? "" : ", ");
+          }
+          profile << "]}"
+                  << (profile_index + 1 == floating_density.profiles.size()
+                          ? "\n"
+                          : ",\n");
+        }
+        profile << "  ]\n}\n";
+        logger_->info(FIN,
+                      66,
+                      "Floating density: layer={}, min={:.6f}, max={:.6f}, "
+                      "profile={}",
+                      layer->getConstName(),
+                      floating_density.min_density,
+                      floating_density.max_density,
+                      profile_filename);
+      }
+    }
     total_area += layer_area;
     if (svg_filename != nullptr && svg_filename[0] != '\0') {
       compute_seconds += seconds(compute_slice_start, Clock::now());
@@ -816,7 +893,8 @@ double MinVarFill::fixedDissectionLpFill(const char* rules_filename,
       max_window_density,
       svg_filename,
       density_report_filename,
-      FixedDissectionLpObjective::kMaximizeMinimumWindowArea);
+      FixedDissectionLpObjective::kMaximizeMinimumWindowArea,
+      0);
 }
 
 double MinVarFill::fixedDissectionLpMinAmountFill(
@@ -844,7 +922,37 @@ double MinVarFill::fixedDissectionLpMinAmountFill(
       max_window_density,
       svg_filename,
       density_report_filename,
-      FixedDissectionLpObjective::kMinimizeTotalFillArea);
+      FixedDissectionLpObjective::kMinimizeTotalFillArea,
+      0);
+}
+
+double MinVarFill::fixedDissectionLpLipFill(const char* rules_filename,
+                                            const Rect& region,
+                                            const odb::Point& origin,
+                                            int window_size,
+                                            int resolution,
+                                            double min_tile_density,
+                                            double max_tile_density,
+                                            double min_window_density,
+                                            double max_window_density,
+                                            int lip_type,
+                                            const char* svg_filename,
+                                            const char* density_report_filename)
+{
+  return fixedDissectionLpFillImpl(
+      rules_filename,
+      region,
+      origin,
+      window_size,
+      resolution,
+      min_tile_density,
+      max_tile_density,
+      min_window_density,
+      max_window_density,
+      svg_filename,
+      density_report_filename,
+      FixedDissectionLpObjective::kMaximizeMinimumWindowArea,
+      lip_type);
 }
 
 double MinVarFill::fixedDissectionLpFillImpl(
@@ -859,7 +967,8 @@ double MinVarFill::fixedDissectionLpFillImpl(
     double max_window_density,
     const char* svg_filename,
     const char* density_report_filename,
-    FixedDissectionLpObjective objective)
+    FixedDissectionLpObjective objective,
+    int lip_type)
 {
   struct LayerDensityReport
   {
@@ -1106,8 +1215,22 @@ double MinVarFill::fixedDissectionLpFillImpl(
 
         const auto solve_start = Clock::now();
         const FixedDissectionLpResult result
-            = solveFixedDissectionLp(problem, objective);
+            = lip_type == 0
+                  ? solveFixedDissectionLp(problem, objective)
+                  : solveLipLpFill(
+                      problem,
+                      makeLipLpNeighborhoods(
+                          grid, resolution, static_cast<LipLpType>(lip_type)));
         const auto solve_end = Clock::now();
+        if (lip_type != 0 && result.solved) {
+          logger_->info(FIN,
+                        65,
+                        "Fixed-dissection Lip{} LP objective L={:.6f} on "
+                        "layer {}.",
+                        lip_type,
+                        result.lip_value,
+                        layer->getConstName());
+        }
         if (!result.solved) {
           logger_->error(FIN,
                          51,
@@ -1227,12 +1350,13 @@ double MinVarFill::fixedDissectionLpFillImpl(
             FIN,
             48,
             "Fixed-dissection LP fill: layer={}, planned_fill_area={:.0f} "
-            "DBU^2, placed_fill_area={:.0f} DBU^2, "
+            "DBU^2, placed_fill_area={:.0f} DBU^2, fill_rectangles={}, "
             "min_post_fill_density={:.6f}, "
             "max_post_fill_density={:.6f}.",
             layer->getConstName(),
             planned_area,
             placed_area,
+            created_fills.size() - layer_fill_start,
             min_post_fill_density,
             max_post_fill_density);
         const auto layer_compute_end = Clock::now();

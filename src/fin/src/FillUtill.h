@@ -33,6 +33,22 @@ struct DensityWindow
   double post_fill_density = 0.0;
 };
 
+// Exact minimum and maximum density windows over every placement of a square
+// window inside a region.
+struct FloatingDensityResult
+{
+  odb::Rect min_window;
+  odb::Rect max_window;
+  double min_density = 0.0;
+  double max_density = 0.0;
+  struct Profile
+  {
+    int y = 0;
+    std::vector<std::pair<int, double>> points;
+  };
+  std::vector<Profile> profiles;
+};
+
 enum class TileViolationReason
 {
   kCapacity,
@@ -71,11 +87,26 @@ std::pair<double, double> getWindowDensityRange(
 std::pair<double, double> getWindowPostFillDensityRange(
     const std::vector<DensityWindow>& windows);
 
+// Run J40 ALG2 exact area-density analysis.  rectangles must be pairwise
+// non-overlapping; shapes outside region are clipped before analysis.
+FloatingDensityResult analyzeFloatingDensityAlg2(
+    const std::vector<odb::Rect>& rectangles,
+    const odb::Rect& region,
+    int window_size);
+
+// Run J40 ALG3 using window-sized spatial buckets to restrict each y sweep.
+// The result is exact and has the same contract as ALG2.
+FloatingDensityResult analyzeFloatingDensityAlg3(
+    const std::vector<odb::Rect>& rectangles,
+    const odb::Rect& region,
+    int window_size);
+
 class TileGrid
 {
  public:
   explicit TileGrid(const TileGridConfig& config);
   const std::vector<odb::Rect>& tiles() const { return tiles_; }
+  size_t tileColumns() const { return tile_columns_; }
   std::vector<DensityWindow>& windows() { return windows_; }
   const std::vector<DensityWindow>& windows() const { return windows_; }
   const std::vector<double>& metalAreas() const { return metal_areas_; }

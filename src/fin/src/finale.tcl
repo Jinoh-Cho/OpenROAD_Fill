@@ -113,11 +113,11 @@ proc density_fill_rectangle_extraction_benchmark { args } {
 }
 
 sta::define_cmd_args "tile_grid_metal_area" \
-  {[-rules rules_file] [-area {lx ly ux uy}] -window window_size [-origin {x y}] [-resolution resolution] [-min_window_density density] [-max_density density] [-svg file] [-density_report file]}
+  {[-rules rules_file] [-area {lx ly ux uy}] -window window_size [-origin {x y}] [-resolution resolution] [-min_window_density density] [-max_density density] [-svg file] [-density_report file] [-floating_density_profile file] [-floating_density_algorithm alg2|alg3]}
 
 proc tile_grid_metal_area { args } {
   sta::parse_key_args "tile_grid_metal_area" args \
-    keys {-rules -area -window -origin -resolution -min_window_density -max_density -svg -density_report} flags {}
+    keys {-rules -area -window -origin -resolution -min_window_density -max_density -svg -density_report -floating_density_profile -floating_density_algorithm} flags {}
   if { ![info exists keys(-rules)] || ![info exists keys(-window)] } {
     utl::error FIN 18 "The -rules and -window arguments must be specified."
   }
@@ -157,9 +157,20 @@ proc tile_grid_metal_area { args } {
   if { [info exists keys(-density_report)] } {
     set density_report_file $keys(-density_report)
   }
+  set floating_density_profile_file ""
+  if { [info exists keys(-floating_density_profile)] } {
+    set floating_density_profile_file $keys(-floating_density_profile)
+  }
+  set floating_density_algorithm alg3
+  if { [info exists keys(-floating_density_algorithm)] } {
+    set floating_density_algorithm $keys(-floating_density_algorithm)
+  }
+  if { $floating_density_algorithm ni {alg2 alg3} } {
+    utl::error FIN 67 "-floating_density_algorithm must be alg2 or alg3."
+  }
   return [fin::tile_grid_metal_area_cmd $keys(-rules) $region \
     [odb::Point x $origin_x $origin_y] \
-    [ord::microns_to_dbu $keys(-window)] $resolution $min_window_density $max_density $svg_file $density_report_file]
+    [ord::microns_to_dbu $keys(-window)] $resolution $min_window_density $max_density $svg_file $density_report_file $floating_density_profile_file $floating_density_algorithm]
 }
 
 sta::define_cmd_args "fixed_dissection_lp" \
@@ -212,9 +223,16 @@ sta::define_cmd_args "fixed_dissection_lp_fill" \
 sta::define_cmd_args "fixed_dissection_lp_min_amount_fill" \
   {[-rules rules_file] [-area {lx ly ux uy}] -window window_size [-origin {x y}] [-resolution resolution] [-min_tile_density density] [-max_tile_density density] [-min_window_density density] [-max_window_density density] [-svg file] [-density_report file]}
 
+sta::define_cmd_args "fixed_dissection_lp_lip_fill" \
+  {[-rules rules_file] [-area {lx ly ux uy}] -window window_size -lip_type {1|2|3} [-origin {x y}] [-resolution resolution] [-min_tile_density density] [-max_tile_density density] [-min_window_density density] [-max_window_density density] [-svg file] [-density_report file]}
+
 proc fixed_dissection_lp_fill_impl { command_name args } {
   sta::parse_key_args $command_name args \
-    keys {-rules -area -window -origin -resolution -min_tile_density -max_tile_density -min_window_density -max_window_density -svg -density_report} flags {}
+    keys {-rules -area -window -origin -resolution -min_tile_density -max_tile_density -min_window_density -max_window_density -svg -density_report -lip_type} flags {}
+  if { $command_name eq "fin::fixed_dissection_lp_lip_fill_cmd" \
+       && (![info exists keys(-lip_type)] || $keys(-lip_type) ni {1 2 3}) } {
+    utl::error FIN 64 "The -lip_type argument must be 1, 2, or 3."
+  }
   foreach required {-rules -window} {
     if { ![info exists keys($required)] } {
       utl::error FIN 42 "The $required argument must be specified."
@@ -281,6 +299,13 @@ proc fixed_dissection_lp_fill_impl { command_name args } {
   if { [info exists keys(-density_report)] } {
     set density_report_file $keys(-density_report)
   }
+  if { $command_name eq "fin::fixed_dissection_lp_lip_fill_cmd" } {
+    return [$command_name $keys(-rules) $region \
+      [odb::Point x $origin_x $origin_y] \
+      [ord::microns_to_dbu $keys(-window)] $resolution $min_tile_density \
+      $max_tile_density $min_window_density $max_window_density \
+      $keys(-lip_type) $svg_file $density_report_file]
+  }
   return [{*}$command_name $keys(-rules) $region \
     [odb::Point x $origin_x $origin_y] \
     [ord::microns_to_dbu $keys(-window)] $resolution $min_tile_density $max_tile_density $min_window_density $max_window_density \
@@ -293,6 +318,11 @@ proc fixed_dissection_lp_fill { args } {
 
 proc fixed_dissection_lp_min_amount_fill { args } {
   return [fixed_dissection_lp_fill_impl fin::fixed_dissection_lp_min_amount_fill_cmd {*}$args]
+}
+
+proc fixed_dissection_lp_lip_fill { args } {
+  return [fixed_dissection_lp_fill_impl \
+    fin::fixed_dissection_lp_lip_fill_cmd {*}$args]
 }
 
 sta::define_cmd_args "multilevel_fixed_dissection_lp" \

@@ -23,6 +23,8 @@ cc_library(
         "src/FillGeometry.h",
         "src/FixedDissectionLp.cpp",
         "src/FixedDissectionLp.h",
+        "src/LipLpFill.cpp",
+        "src/LipLpFill.h",
         "src/MLFixedDissectionLp.cpp",
         "src/MLFixedDissectionLp.h",
         "src/Finale.cpp",

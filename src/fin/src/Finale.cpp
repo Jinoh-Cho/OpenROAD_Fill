@@ -66,7 +66,9 @@ double Finale::tileGridMetalArea(const char* rules_filename,
                                  double min_window_density,
                                  double max_density,
                                  const char* svg_filename,
-                                 const char* density_report_filename)
+                                 const char* density_report_filename,
+                                 const char* floating_density_profile_filename,
+                                 const char* floating_density_algorithm)
 {
   MinVarFill filler(db_, logger_);
   return filler.tileGridMetalArea(rules_filename,
@@ -77,7 +79,9 @@ double Finale::tileGridMetalArea(const char* rules_filename,
                                   min_window_density,
                                   max_density,
                                   svg_filename,
-                                  density_report_filename);
+                                  density_report_filename,
+                                  floating_density_profile_filename,
+                                  floating_density_algorithm);
 }
 
 double Finale::fixedDissectionLp(const char* rules_filename,
@@ -149,6 +153,34 @@ double Finale::fixedDissectionLpMinAmountFill(
                                                max_window_density,
                                                svg_filename,
                                                density_report_filename);
+}
+
+double Finale::fixedDissectionLpLipFill(const char* rules_filename,
+                                        const odb::Rect& region,
+                                        const odb::Point& origin,
+                                        int window_size,
+                                        int resolution,
+                                        double min_tile_density,
+                                        double max_tile_density,
+                                        double min_window_density,
+                                        double max_window_density,
+                                        int lip_type,
+                                        const char* svg_filename,
+                                        const char* density_report_filename)
+{
+  MinVarFill filler(db_, logger_);
+  return filler.fixedDissectionLpLipFill(rules_filename,
+                                         region,
+                                         origin,
+                                         window_size,
+                                         resolution,
+                                         min_tile_density,
+                                         max_tile_density,
+                                         min_window_density,
+                                         max_window_density,
+                                         lip_type,
+                                         svg_filename,
+                                         density_report_filename);
 }
 
 double Finale::multilevelFixedDissectionLp(const char* rules_filename,

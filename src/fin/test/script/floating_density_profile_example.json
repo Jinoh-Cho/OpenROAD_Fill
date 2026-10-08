@@ -1,0 +1,16 @@
+{
+  "min_density_limit": 0.30,
+  "max_density_limit": 0.60,
+  "profiles": [
+    {
+      "label": "window y=0",
+      "y": 0,
+      "points": [[0, 0.31], [500, 0.38], [1000, 0.42]]
+    },
+    {
+      "label": "window y=500",
+      "y": 500,
+      "points": [[0, 0.34], [500, 0.41], [1000, 0.46]]
+    }
+  ]
+}

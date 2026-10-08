@@ -2,180 +2,200 @@
 // Copyright (c) 2020-2025, The OpenROAD Authors
 
 %{
-#include "ord/OpenRoad.hh"
 #include "fin/Finale.h"
+#include "ord/OpenRoad.hh"
 
 %}
 
 %include "../../Exception.i"
 
 %inline %{
+  void set_density_fill_debug_cmd()
+  {
+    auto* finale = ord::OpenRoad::openRoad()->getFinale();
+    finale->setDebug();
+  }
 
-void
-set_density_fill_debug_cmd()
-{
-  auto *finale = ord::OpenRoad::openRoad()->getFinale();
-  finale->setDebug();
-}
+  void set_min_var_fill_debug_cmd()
+  {
+    auto* finale = ord::OpenRoad::openRoad()->getFinale();
+    finale->setMinVarDebug();
+  }
 
-void
-set_min_var_fill_debug_cmd()
-{
-  auto* finale = ord::OpenRoad::openRoad()->getFinale();
-  finale->setMinVarDebug();
-}
+  void density_fill_cmd(const char* rules_filename, const odb::Rect& fill_area)
+  {
+    auto* finale = ord::OpenRoad::openRoad()->getFinale();
+    finale->densityFill(rules_filename, fill_area);
+  }
 
-void
-density_fill_cmd(const char* rules_filename,
-                 const odb::Rect& fill_area)
-{
-  auto *finale = ord::OpenRoad::openRoad()->getFinale();
-  finale->densityFill(rules_filename, fill_area);
-}
+  void min_var_fill_cmd(const char* rules_filename, const odb::Rect& fill_area)
+  {
+    auto* finale = ord::OpenRoad::openRoad()->getFinale();
+    finale->minVarFill(rules_filename, fill_area);
+  }
 
-void
-min_var_fill_cmd(const char* rules_filename,
-                 const odb::Rect& fill_area)
-{
-  auto* finale = ord::OpenRoad::openRoad()->getFinale();
-  finale->minVarFill(rules_filename, fill_area);
-}
+  void density_fill_rectangle_extraction_benchmark_cmd(
+      const char* rules_filename,
+      const odb::Rect& fill_area,
+      int left_copies,
+      int right_copies,
+      int bottom_copies,
+      int top_copies,
+      int runs)
+  {
+    auto* finale = ord::OpenRoad::openRoad()->getFinale();
+    finale->benchmarkRectangleExtraction(rules_filename,
+                                         fill_area,
+                                         left_copies,
+                                         right_copies,
+                                         bottom_copies,
+                                         top_copies,
+                                         runs);
+  }
 
-void
-density_fill_rectangle_extraction_benchmark_cmd(const char* rules_filename,
-                                                 const odb::Rect& fill_area,
-                                                 int left_copies,
-                                                 int right_copies,
-                                                 int bottom_copies,
-                                                 int top_copies,
-                                                 int runs)
-{
-  auto *finale = ord::OpenRoad::openRoad()->getFinale();
-  finale->benchmarkRectangleExtraction(rules_filename,
-                                       fill_area,
-                                       left_copies,
-                                       right_copies,
-                                       bottom_copies,
-                                       top_copies,
-                                       runs);
-}
+  double tile_grid_metal_area_cmd(const char* rules_filename,
+                                  const odb::Rect& region,
+                                  const odb::Point& origin,
+                                  int window_size,
+                                  int resolution,
+                                  double min_window_density,
+                                  double max_density,
+                                  const char* svg_filename,
+                                  const char* density_report_filename,
+                                  const char* floating_density_profile_filename,
+                                  const char* floating_density_algorithm)
+  {
+    auto* finale = ord::OpenRoad::openRoad()->getFinale();
+    return finale->tileGridMetalArea(rules_filename,
+                                     region,
+                                     origin,
+                                     window_size,
+                                     resolution,
+                                     min_window_density,
+                                     max_density,
+                                     svg_filename,
+                                     density_report_filename,
+                                     floating_density_profile_filename,
+                                     floating_density_algorithm);
+  }
 
-double
-tile_grid_metal_area_cmd(const char* rules_filename,
-                         const odb::Rect& region,
-                         const odb::Point& origin,
-                         int window_size,
-                         int resolution,
-                         double min_window_density,
-                         double max_density,
-                         const char* svg_filename,
-                         const char* density_report_filename)
-{
-  auto* finale = ord::OpenRoad::openRoad()->getFinale();
-  return finale->tileGridMetalArea(rules_filename,
-                                   region,
-                                   origin,
-                                   window_size,
-                                   resolution,
-                                   min_window_density,
-                                   max_density,
-                                   svg_filename,
-                                   density_report_filename);
-}
+  double fixed_dissection_lp_cmd(const char* rules_filename,
+                                 const odb::Rect& region,
+                                 const odb::Point& origin,
+                                 int window_size,
+                                 int resolution,
+                                 double max_density,
+                                 const char* svg_filename)
+  {
+    auto* finale = ord::OpenRoad::openRoad()->getFinale();
+    return finale->fixedDissectionLp(rules_filename,
+                                     region,
+                                     origin,
+                                     window_size,
+                                     resolution,
+                                     max_density,
+                                     svg_filename);
+  }
 
-double
-fixed_dissection_lp_cmd(const char* rules_filename,
-                        const odb::Rect& region,
-                        const odb::Point& origin,
-                        int window_size,
-                        int resolution,
-                        double max_density,
-                        const char* svg_filename)
-{
-  auto* finale = ord::OpenRoad::openRoad()->getFinale();
-  return finale->fixedDissectionLp(
-      rules_filename,
-      region,
-      origin,
-      window_size,
-      resolution,
-      max_density,
-      svg_filename);
-}
+  double fixed_dissection_lp_fill_cmd(const char* rules_filename,
+                                      const odb::Rect& region,
+                                      const odb::Point& origin,
+                                      int window_size,
+                                      int resolution,
+                                      double min_tile_density,
+                                      double max_tile_density,
+                                      double min_window_density,
+                                      double max_window_density,
+                                      const char* svg_filename,
+                                      const char* density_report_filename)
+  {
+    auto* finale = ord::OpenRoad::openRoad()->getFinale();
+    return finale->fixedDissectionLpFill(rules_filename,
+                                         region,
+                                         origin,
+                                         window_size,
+                                         resolution,
+                                         min_tile_density,
+                                         max_tile_density,
+                                         min_window_density,
+                                         max_window_density,
+                                         svg_filename,
+                                         density_report_filename);
+  }
 
-double
-fixed_dissection_lp_fill_cmd(const char* rules_filename,
-                             const odb::Rect& region,
-                             const odb::Point& origin,
-                             int window_size,
-                             int resolution,
-                             double min_tile_density,
-                             double max_tile_density,
-                             double min_window_density,
-                             double max_window_density,
-                             const char* svg_filename,
-                             const char* density_report_filename)
-{
-  auto* finale = ord::OpenRoad::openRoad()->getFinale();
-  return finale->fixedDissectionLpFill(rules_filename,
-                                       region,
-                                       origin,
-                                       window_size,
-                                       resolution,
-                                       min_tile_density,
-                                       max_tile_density,
-                                       min_window_density,
-                                       max_window_density,
-                                       svg_filename,
-                                       density_report_filename);
-}
+  double fixed_dissection_lp_min_amount_fill_cmd(
+      const char* rules_filename,
+      const odb::Rect& region,
+      const odb::Point& origin,
+      int window_size,
+      int resolution,
+      double min_tile_density,
+      double max_tile_density,
+      double min_window_density,
+      double max_window_density,
+      const char* svg_filename,
+      const char* density_report_filename)
+  {
+    auto* finale = ord::OpenRoad::openRoad()->getFinale();
+    return finale->fixedDissectionLpMinAmountFill(rules_filename,
+                                                  region,
+                                                  origin,
+                                                  window_size,
+                                                  resolution,
+                                                  min_tile_density,
+                                                  max_tile_density,
+                                                  min_window_density,
+                                                  max_window_density,
+                                                  svg_filename,
+                                                  density_report_filename);
+  }
 
-double
-fixed_dissection_lp_min_amount_fill_cmd(const char* rules_filename,
-                                        const odb::Rect& region,
-                                        const odb::Point& origin,
-                                        int window_size,
-                                        int resolution,
-                                        double min_tile_density,
-                                        double max_tile_density,
-                                        double min_window_density,
-                                        double max_window_density,
-                                        const char* svg_filename,
-                                        const char* density_report_filename)
-{
-  auto* finale = ord::OpenRoad::openRoad()->getFinale();
-  return finale->fixedDissectionLpMinAmountFill(rules_filename,
-                                                region,
-                                                origin,
-                                                window_size,
-                                                resolution,
-                                                min_tile_density,
-                                                max_tile_density,
-                                                min_window_density,
-                                                max_window_density,
-                                                svg_filename,
-                                                density_report_filename);
-}
+  double fixed_dissection_lp_lip_fill_cmd(const char* rules_filename,
+                                          const odb::Rect& region,
+                                          const odb::Point& origin,
+                                          int window_size,
+                                          int resolution,
+                                          double min_tile_density,
+                                          double max_tile_density,
+                                          double min_window_density,
+                                          double max_window_density,
+                                          int lip_type,
+                                          const char* svg_filename,
+                                          const char* density_report_filename)
+  {
+    auto* finale = ord::OpenRoad::openRoad()->getFinale();
+    return finale->fixedDissectionLpLipFill(rules_filename,
+                                            region,
+                                            origin,
+                                            window_size,
+                                            resolution,
+                                            min_tile_density,
+                                            max_tile_density,
+                                            min_window_density,
+                                            max_window_density,
+                                            lip_type,
+                                            svg_filename,
+                                            density_report_filename);
+  }
 
-double
-multilevel_fixed_dissection_lp_cmd(const char* rules_filename,
-                                   const odb::Rect& region,
-                                   const odb::Point& origin,
-                                   int window_size,
-                                   int resolution,
-                                   double relative_accuracy,
-                                   double max_density,
-                                   const char* svg_filename)
-{
-  auto* finale = ord::OpenRoad::openRoad()->getFinale();
-  return finale->multilevelFixedDissectionLp(rules_filename,
-                                             region,
-                                             origin,
-                                             window_size,
-                                             resolution,
-                                             relative_accuracy,
-                                             max_density,
-                                             svg_filename);
-}
+  double multilevel_fixed_dissection_lp_cmd(const char* rules_filename,
+                                            const odb::Rect& region,
+                                            const odb::Point& origin,
+                                            int window_size,
+                                            int resolution,
+                                            double relative_accuracy,
+                                            double max_density,
+                                            const char* svg_filename)
+  {
+    auto* finale = ord::OpenRoad::openRoad()->getFinale();
+    return finale->multilevelFixedDissectionLp(rules_filename,
+                                               region,
+                                               origin,
+                                               window_size,
+                                               resolution,
+                                               relative_accuracy,
+                                               max_density,
+                                               svg_filename);
+  }
 
 %} // inline

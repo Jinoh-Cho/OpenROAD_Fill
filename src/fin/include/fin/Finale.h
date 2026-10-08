@@ -33,7 +33,9 @@ class Finale
                            double min_window_density,
                            double max_density,
                            const char* svg_filename,
-                           const char* density_report_filename);
+                           const char* density_report_filename,
+                           const char* floating_density_profile_filename,
+                           const char* floating_density_algorithm);
   double fixedDissectionLp(const char* rules_filename,
                            const odb::Rect& region,
                            const odb::Point& origin,
@@ -63,6 +65,18 @@ class Finale
                                         double max_window_density,
                                         const char* svg_filename,
                                         const char* density_report_filename);
+  double fixedDissectionLpLipFill(const char* rules_filename,
+                                  const odb::Rect& region,
+                                  const odb::Point& origin,
+                                  int window_size,
+                                  int resolution,
+                                  double min_tile_density,
+                                  double max_tile_density,
+                                  double min_window_density,
+                                  double max_window_density,
+                                  int lip_type,
+                                  const char* svg_filename,
+                                  const char* density_report_filename);
   double multilevelFixedDissectionLp(const char* rules_filename,
                                      const odb::Rect& region,
                                      const odb::Point& origin,
