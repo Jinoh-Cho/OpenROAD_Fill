@@ -13,21 +13,15 @@ COMPULSORY_TESTS = [
 ]
 
 # From CMakeLists.txt or_integration_tests(PASSFAIL_TESTS
-# Rectangle extraction timings are intentionally nondeterministic.  The test
-# only verifies that the experimental command completes successfully.
 PASSFAIL_TESTS = [
     "aes_density_fill_svg",
     "aes_fixed_dissection_lp_fill",
-    "gcd_fill_rectangle_benchmark",
     "gcd_density_fill_svg",
-    "gcd_fixed_dissection_lp",
     "gcd_fixed_dissection_lp_fill",
     "gcd_fixed_dissection_lp_fill_infeasible",
-    "gcd_multilevel_fixed_dissection_lp",
     "gcd_tile_grid_density",
     "ibex_density_fill_svg",
     "ibex_fixed_dissection_lp_fill",
-    "min_var_fill",
 ]
 
 ALL_TESTS = COMPULSORY_TESTS + PASSFAIL_TESTS
@@ -113,17 +107,6 @@ cc_test(
     ],
 )
 
-cc_test(
-    name = "ml_fixed_dissection_lp_test",
-    srcs = ["cpp/MLFixedDissectionLpTest.cpp"],
-    features = ["-layering_check"],  # Tests FIN private algorithm headers.
-    includes = ["../src"],
-    deps = [
-        "//src/fin:fin",
-        "@googletest//:gtest",
-        "@googletest//:gtest_main",
-    ],
-)
 
 py_test(
     name = "fin_man_tcl_check",

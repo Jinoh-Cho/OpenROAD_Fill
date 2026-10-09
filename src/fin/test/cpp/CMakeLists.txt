@@ -24,15 +24,3 @@ gtest_discover_tests(FixedDissectionLpTest
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../..
 )
 add_dependencies(build_and_test FixedDissectionLpTest)
-
-add_executable(MLFixedDissectionLpTest MLFixedDissectionLpTest.cpp)
-target_include_directories(MLFixedDissectionLpTest PRIVATE ../../src)
-target_link_libraries(MLFixedDissectionLpTest
-  fin
-  GTest::gtest
-  GTest::gtest_main
-)
-gtest_discover_tests(MLFixedDissectionLpTest
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../..
-)
-add_dependencies(build_and_test MLFixedDissectionLpTest)

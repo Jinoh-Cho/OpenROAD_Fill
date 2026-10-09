@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-#include "FixedDissectionLp.h"
+#include "FillLpSolver.h"
 
 #include <algorithm>
 #include <memory>
@@ -46,8 +46,7 @@ void validateProblem(const FixedDissectionLpProblem& problem)
     if (problem.tile_areas[index] < 0.0 || problem.feature_areas[index] < 0.0
         || problem.max_fill_areas[index] < 0.0) {
       throw std::invalid_argument(
-          "Tile areas and fill capacities must be "
-          "nonnegative.");
+          "Tile areas and fill capacities must be nonnegative.");
     }
   }
   for (const auto& window : problem.windows) {
@@ -57,8 +56,7 @@ void validateProblem(const FixedDissectionLpProblem& problem)
     for (const size_t tile_index : window) {
       if (tile_index >= tile_count) {
         throw std::invalid_argument(
-            "A density window references an invalid "
-            "tile index.");
+            "A density window references an invalid tile index.");
       }
     }
   }
@@ -66,9 +64,8 @@ void validateProblem(const FixedDissectionLpProblem& problem)
 
 }  // namespace
 
-FixedDissectionLpResult solveFixedDissectionLp(
-    const FixedDissectionLpProblem& problem,
-    FixedDissectionLpObjective objective_type)
+FixedDissectionLpResult solveFillLp(const FixedDissectionLpProblem& problem,
+                                    const FillLpObjective objective_type)
 {
   validateProblem(problem);
 
@@ -100,12 +97,11 @@ FixedDissectionLpResult solveFixedDissectionLp(
     fill_variables.push_back(solver->MakeNumVar(
         min_fill_area, max_fill_area, "p_" + std::to_string(index)));
   }
+
   MPVariable* min_window_area = nullptr;
-  if (objective_type
-      == FixedDissectionLpObjective::kMaximizeMinimumWindowArea) {
+  if (objective_type == FillLpObjective::MaximizeMinimumWindowArea) {
     min_window_area = solver->MakeNumVar(0.0, infinity, "M");
   }
-
   for (size_t index = 0; index < problem.windows.size(); index++) {
     const auto& window = problem.windows[index];
     double window_area = 0.0;
@@ -114,22 +110,16 @@ FixedDissectionLpResult solveFixedDissectionLp(
       window_area += problem.tile_areas[tile_index];
       feature_area += problem.feature_areas[tile_index];
     }
-
-    // J40 equation (4): no window can exceed the density upper bound.
     const double fill_budget = std::max(
         problem.max_window_density * window_area - feature_area, 0.0);
     MPConstraint* upper_bound = solver->MakeRowConstraint(
         -infinity, fill_budget, "upper_" + std::to_string(index));
-
-    // Every window must reach the requested post-fill density lower bound.
     const double minimum_fill_area = std::max(
         problem.min_window_density * window_area - feature_area, 0.0);
     MPConstraint* lower_bound = solver->MakeRowConstraint(
         minimum_fill_area, infinity, "lower_" + std::to_string(index));
-
     MPConstraint* min_bound = nullptr;
     if (min_window_area != nullptr) {
-      // J40 equation (5): M is no larger than every post-fill window area.
       min_bound = solver->MakeRowConstraint(
           -infinity, feature_area, "minimum_" + std::to_string(index));
       min_bound->SetCoefficient(min_window_area, 1.0);

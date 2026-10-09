@@ -18,11 +18,16 @@ target_sources(fin
     src/DensityFill.cpp
     src/FillConfig.cpp
     src/FillGeometry.cpp
-    src/FixedDissectionLp.cpp
+    src/FillLpSolver.cpp
     src/LipLpFill.cpp
-    src/MLFixedDissectionLp.cpp
-    src/MinVarFill.cpp
-    src/FillUtill.cpp
+    src/LPFill.cpp
+    src/LPFillUtil.cpp
+    src/MinVarLP.cpp
+    src/MinFillAmountLp.cpp
+    src/DensityAnalyzer.cpp
+    src/FillReporter.cpp
+    src/FillSvgWriter.cpp
+    src/TileGrid.cpp
     src/graphics.cpp
 )
 

@@ -28,51 +28,6 @@ density_fill
 | `-rules` | Specify `json` rule file. |
 | `-area` | Optional. If not specified, the core area will be used. |
 
-### Minimum-Variation Fill
-
-`min_var_fill` currently uses the same density-fill baseline as a starting
-point for the minimum-variation algorithm. Its implementation is independent
-from `DensityFill`, so candidate selection and tile-density optimization can
-be changed without modifying the established density-fill path.
-
-```tcl
-min_var_fill
-    [-rules rules_file]
-    [-area {lx ly ux uy}]
-```
-
-The options have the same meaning as `density_fill`.
-
-### Debugging
-
-Enable interactive GUI rendering before invoking the corresponding command.
-The GUI must be enabled for the debug views to be displayed.
-
-<!-- checker: skip -->
-```tcl
-density_fill_debug
-density_fill -rules fill.json
-
-min_var_fill_debug
-min_var_fill -rules fill.json
-```
-
-### Rectangle extraction benchmark
-
-This experimental command measures fill-area rectangle decomposition after
-replicating the input area. It does not insert fill shapes.
-
-```tcl
-density_fill_rectangle_extraction_benchmark
-    [-rules rules_file]
-    [-area {lx ly ux uy}]
-    [-left copies]
-    [-right copies]
-    [-bottom copies]
-    [-top copies]
-    [-runs runs]
-```
-
 ### Tile-grid metal area
 
 This experimental command partitions the selected area into tiles and creates
@@ -92,44 +47,9 @@ tile_grid_metal_area
     [-svg file]
 ```
 
-### Fixed-dissection LP analysis
-
-This experimental command solves J40's fixed-dissection linear program for
-each configured layer of the loaded layout. It reports the ideal tile fill
-area required to maximize the minimum post-fill window density; it does not
-insert fill geometry. The LP uses the empty portion of each tile as an ideal
-fill-capacity bound; spacing- and pattern-aware legal placement is a later
-step.
-
-```tcl
-fixed_dissection_lp
-    -rules rules_file
-    [-area {lx ly ux uy}]
-    -window window_size
-    [-origin {x y}]
-    [-resolution resolution]
-    [-min_tile_density density]
-    -max_density density
-    [-svg file]
-```
-
-When `-svg` is supplied, FIN writes three files per configured layer:
-
-- `<file>_<layer>.svg`: circuit/metal preview with tile and sliding-window
-  boundaries.
-- `<file>_<layer>_tile_density.svg`: a circuit preview beside a readable tile
-  density grid. Tile regions on the preview are colored by LP density; each
-  indexed grid cell reports existing `metal` density and LP post-fill `lp`
-  density.
-- `<file>_<layer>_window_density.svg`: a circuit preview beside a non-
-  overlapping grid of sliding-window start positions, with existing `metal`
-  and LP post-fill `lp` density per window. Colored preview markers identify
-  the corresponding window start locations without drawing overlapping
-  window labels.
-
 ### Fixed-dissection LP fill placement
 
-`fixed_dissection_lp_fill` first generates legal non-OPC fill candidates in
+`fixed_dissection_lp_min_var_fill` first generates legal non-OPC fill candidates in
 each tile using the JSON shape and spacing rules. It uses the sum of those
 candidates as the LP capacity, then inserts a subset whose area does not
 exceed the LP solution for that tile. Candidates are inset from tile
@@ -138,7 +58,7 @@ neighboring tiles remain legal. This initial implementation deliberately does
 not run a post-placement repair pass and does not yet place OPC fill.
 
 ```tcl
-fixed_dissection_lp_fill
+fixed_dissection_lp_min_var_fill
     -rules rules_file
     [-area {lx ly ux uy}]
     -window window_size
@@ -165,184 +85,114 @@ given, FIN writes two SVGs per configured layer: `<file>_<layer>_fillable.svg`
 shows the pre-placement fillable regions in green, and `<file>_<layer>.svg`
 shows those regions plus the selected fill rectangles in blue.
 
-### Multilevel fixed-dissection LP analysis
+### Minimum-fill-amount LP placement
 
-`multilevel_fixed_dissection_lp` implements J40's multilevel density
-analysis before solving the fixed-dissection LP. Starting from a coarse
-dissection, it evaluates standard and bloated windows, retains only windows
-that can still contain a maximum-density window, and doubles the dissection
-resolution until the relative upper/lower bound gap reaches `-accuracy`.
-Only windows examined by this analysis are passed to the LP.
+`fixed_dissection_lp_min_amount_fill` uses the same candidate generation and
+placement path as `fixed_dissection_lp_min_var_fill`, but minimizes total planned fill
+area while satisfying the density bounds.
 
 ```tcl
-multilevel_fixed_dissection_lp
+fixed_dissection_lp_min_amount_fill
     -rules rules_file
     [-area {lx ly ux uy}]
     -window window_size
     [-origin {x y}]
     [-resolution resolution]
-    -accuracy relative_accuracy
-    -max_density density
+    [-min_tile_density density]
+    [-max_tile_density density]
+    [-min_window_density density]
+    [-max_window_density density]
     [-svg file]
+    [-density_report file]
 ```
 
-`-resolution` is the finest multilevel dissection and must be a power of two.
-`-accuracy` is a relative bound gap in `(0.0, 1.0]`. Like
-`fixed_dissection_lp`, this command plans fill area only; it does not create
-physical fill geometry.
+The return value is the area actually placed, in DBU². Output options and
+defaults are shared with `fixed_dissection_lp_min_var_fill`.
 
-When `-svg` is supplied, FIN writes `<file>_<layer>.svg`. Gray shapes are
-existing metal, tile color encodes existing density from red (low) to green
-(high), and red outlines are the windows retained by multilevel analysis.
+### Lip LP placement
+
+`fixed_dissection_lp_lip_fill` selects the Lip1, Lip2, or Lip3 neighborhood
+objective with `-lip_type`. It shares the legal candidates, density bounds,
+and physical placement path of the other LP fill commands.
+
+```tcl
+fixed_dissection_lp_lip_fill
+    -rules rules_file
+    [-area {lx ly ux uy}]
+    -window window_size
+    -lip_type {1|2|3}
+    [-origin {x y}]
+    [-resolution resolution]
+    [-min_tile_density density]
+    [-max_tile_density density]
+    [-min_window_density density]
+    [-max_window_density density]
+    [-svg file]
+    [-density_report file]
+```
+
+The return value is the area actually placed, in DBU². Output options and
+defaults are shared with `fixed_dissection_lp_min_var_fill`.
 
 ## Source architecture
 
-The FIN module has two fill implementations that share rule parsing and
-geometry collection. The normal OpenROAD density-fill implementation remains
-in `DensityFill`; experimental minimum-variation work belongs in
-`MinVarFill`.
+The public FIN commands are limited to density fill, MinVar LP fill,
+minimum-fill-amount LP fill, Lip1/2/3 LP fill, and post-fill density analysis.
+The old `fixed_dissection_lp_fill` command has been renamed to
+`fixed_dissection_lp_min_var_fill`; no compatibility alias is provided.
 
-```text
-Tcl commands (finale.tcl)
-        |
-        v
-SWIG wrappers (finale.i) --> Finale (Finale.h / Finale.cpp)
-        |                         |
-        |                         +--> DensityFill: established fill algorithm
-        |                         |
-        |                         +--> MinVarFill: minimum-variation analysis
-        v
-FillConfig: JSON rules          FillGeometry: OpenDB shapes -> Polygon90Set
-        |                         |
-        +-------------+-----------+
-                      v
-              OpenDB / Boost Polygon
-```
-
-### Source files and responsibilities
-
-#### Original OpenROAD FIN layout
-
-Before the MinVar work, FIN was centered on one implementation,
-`DensityFill`. The rule parser and existing-metal geometry collector were
-private helpers in `DensityFill.cpp`.
-
-```text
-finale.tcl --> finale.i --> Finale --> DensityFill
-                                      |
-                                      +--> JSON rule parsing (private)
-                                      +--> non-fill geometry collection (private)
-                                      +--> Boost Polygon fill generation
-                                      +--> OpenDB dbFill insertion
-                                      +--> Graphics (GUI debug only)
-```
-
-| Original file | Original role | Original dependencies |
-| --- | --- | --- |
-| `include/fin/Finale.h`, `src/Finale.cpp` | Public FIN facade owned by `ord::OpenRoad`; creates `DensityFill` and forwards `density_fill`. | OpenDB, logger, `DensityFill` |
-| `include/fin/MakeFinale.h`, `src/MakeFinale.cpp` | Initializes the FIN Tcl package. | Tcl, encoded Tcl scripts, SWIG module |
-| `src/finale.i` | SWIG wrappers for C++ FIN operations. | `Finale`, `ord::OpenRoad` |
-| `src/finale.tcl` | Defines `density_fill`; validates options and converts microns to DBU. | Tcl STA utilities, OpenDB Tcl API, SWIG wrappers |
-| `src/DensityFill.h`, `src/DensityFill.cpp` | The original density-fill algorithm and its private JSON parsing, shape collection, spacing/pruning, and `dbFill` insertion helpers. | Boost Property Tree, Boost Polygon, OpenDB, logger, GUI |
-| `src/graphics.h`, `src/graphics.cpp` | Draws intermediate polygon areas when GUI debugging is enabled. | OpenROAD GUI, Boost Polygon |
-| `src/polygon.h` | Local aliases for Boost Polygon geometry types and operators. | Boost Polygon |
-| `src/fin/CMakeLists.txt`, `src/fin/BUILD` | Registers the FIN library, Tcl/SWIG bindings, and dependencies in CMake and Bazel. | CMake/Bazel, OpenDB, GUI, Boost, Tcl |
-
-#### Current layout: shared infrastructure and MinVar
-
-The original private helpers were extracted without changing the established
-`DensityFill` algorithm. Both implementations now use the same rule and
-geometry inputs, but only `MinVarFill` is intended to diverge in its future
-candidate-selection step.
-
-| Current file | Relationship to original layout | Role | Main dependencies |
-| --- | --- | --- | --- |
-| `include/fin/Finale.h`, `src/Finale.cpp` | Extended original facade | Dispatches density fill, MinVar fill, tile-grid analysis, and fixed-dissection LP analysis. | `DensityFill`, `MinVarFill`, OpenDB, logger |
-| `src/DensityFill.h`, `src/DensityFill.cpp` | Original implementation retained | Established OpenROAD density-fill algorithm: legal non-OPC/OPC regions, pruning, and `dbFill` insertion. | `FillConfig`, `FillGeometry`, Boost Polygon, OpenDB, GUI |
-| `src/FillConfig.h`, `src/FillConfig.cpp` | Extracted from original `DensityFill.cpp` | Shared JSON parser. Expands grouped rules into `FillLayerConfigs`, keyed by `odb::dbTechLayer*`. | Boost Property Tree, OpenDB, logger |
-| `src/FillGeometry.h`, `src/FillGeometry.cpp` | Extracted from original `DensityFill.cpp` | Shared `makeRect`, `insertShape`, and `orNonFills` helpers. | OpenDB, Boost Polygon |
-| `src/MinVarFill.h`, `src/MinVarFill.cpp` | New implementation | Independent density-fill baseline plus per-layer fixed-dissection LP orchestration. | `FillConfig`, `FillGeometry`, `FillUtill`, `FixedDissectionLp`, Boost Polygon, OpenDB, GUI |
-| `src/FillUtill.h`, `src/FillUtill.cpp` | Internal analysis utility | Builds full sliding density windows, calculates tile/window density, and writes layout and density-map SVGs. | Boost Polygon, OpenDB |
-| `src/FixedDissectionLp.h`, `src/FixedDissectionLp.cpp` | New algorithm utility | Implements J40 equations (2)–(5) with OR-Tools GLOP: maximize the minimum post-fill window area under tile capacity and upper-density constraints. | OR-Tools linear solver |
-| `src/graphics.h`, `src/graphics.cpp` | Unchanged original shared utility | GUI renderer used by both fill implementations in debug mode. | OpenROAD GUI, Boost Polygon |
-| `src/finale.i`, `src/finale.tcl` | Extended original command layer | Adds MinVar, tile-grid, and `fixed_dissection_lp` commands alongside the original density-fill commands. | `Finale`, SWIG, Tcl |
-
-#### Complete FIN file inventory
-
-The tables above describe the main algorithm paths. This inventory covers all
-remaining source, binding, build, and test files in `src/fin` as well, so it
-can be used to compare the original FIN structure with the current layout.
-
-| File | Role |
+| Files | Responsibility |
 | --- | --- |
-| `README.md` | User documentation, command synopsis, architecture, and JSON rule format. |
-| `CMakeLists.txt` | CMake registration of the FIN library, Tcl SWIG library, Python binding, and tests. |
-| `BUILD` | Bazel registration of the FIN library, Tcl/Python SWIG wrappers, generated message metadata, and test-visible documentation. |
-| `include/fin/Finale.h` | Public `Finale` facade declaration. |
-| `include/fin/MakeFinale.h` | Public declaration of `initFinale()`, called while initializing OpenROAD. |
-| `src/FillUtill.h`, `src/FillUtill.cpp` | Internal tile grid, full sliding-window, density-map SVG, and LP-result visualization APIs. |
-| `src/FixedDissectionLp.h`, `src/FixedDissectionLp.cpp` | Internal OR-Tools formulation and result types for J40 fixed-dissection LP solving. |
-| `src/Finale.cpp` | Implements the `Finale` facade and selects density-fill or MinVarFill. |
-| `src/MakeFinale.cpp` | Registers the compiled Tcl/SWIG FIN package during startup. |
-| `src/finale.i` | Tcl SWIG wrappers for all FIN Tcl-to-C++ calls. |
-| `src/finale-py.i` | Python SWIG interface; exposes the public `Finale` API to Python. |
-| `src/finale.tcl` | Tcl command definitions, option validation, and unit conversion. |
-| `src/DensityFill.h`, `src/DensityFill.cpp` | Original OpenROAD density-fill implementation. |
-| `src/MinVarFill.h`, `src/MinVarFill.cpp` | Independent baseline and future implementation location for minimum-variation fill. |
-| `src/FillConfig.h`, `src/FillConfig.cpp` | Shared fill-rule configuration types and JSON parser. |
-| `src/FillGeometry.h`, `src/FillGeometry.cpp` | Shared OpenDB-to-Boost-Polygon geometry conversion helpers. |
-| `src/graphics.h`, `src/graphics.cpp` | FIN GUI debug renderer. |
-| `src/polygon.h` | Local Boost Polygon aliases and operators. |
+| `include/fin/Finale.h`, `src/Finale.cpp` | Public facade selecting density fill or a named LP objective. |
+| `src/finale.tcl`, `src/finale.i`, `src/finale-py.i` | Tcl option validation, shared unit conversion, and language bindings. |
+| `src/DensityFill.h/.cpp` | Original OpenROAD rule-based physical fill placement. |
+| `src/LPFill.h/.cpp` | Candidate generation, LP dispatch, physical placement, and post-fill analysis orchestration. |
+| `src/LPFillUtil.h/.cpp` | Spacing, legal tile regions, and rectangular candidate generation. |
+| `src/FillConfig.h/.cpp`, `src/FillGeometry.h/.cpp` | Shared JSON rules and existing-layout geometry collection. |
+| `src/TileGrid.h/.cpp` | Tile/window geometry and window-to-tile indices. |
+| `src/DensityAnalysis.h`, `src/DensityAnalyzer.h/.cpp` | Shared result types, tile/window densities, ALG2/ALG3, statistics, and histograms. |
+| `src/FixedDissectionLp.h` | Shared LP problem and result types. |
+| `src/MinVarLP.h/.cpp`, `src/MinFillAmountLp.h/.cpp`, `src/LipLpFill.h/.cpp`, `src/FillLpSolver.h/.cpp` | Named objectives and numerical solvers. |
+| `src/FillReporter.h/.cpp`, `src/FillSvgWriter.h/.cpp` | JSON results/profiles and SVG rendering. |
+| `src/MakeFinale.cpp`, `include/fin/MakeFinale.h` | FIN Tcl package initialization. |
 
-| Test or support file | Role |
-| --- | --- |
-| `test/CMakeLists.txt`, `test/BUILD` | Register FIN regression tests in CMake and Bazel. |
-| `test/fill.json` | Fill rule input shared by FIN test scripts. |
-| `test/gcd_prefill.def` | Small placed/routed design used as the common test input. |
-| `test/gcd_fill.tcl`, `test/gcd_fill.py` | Tcl and Python smoke tests for the original density-fill command. |
-| `test/gcd_fill.ok`, `test/gcd_fill.defok` | Golden log and DEF output for `gcd_fill`. |
-| `test/min_var_fill.tcl` | Pass/fail smoke test and directly runnable Tcl script for `min_var_fill`. |
-| `test/gcd_fill_rectangle_benchmark.tcl` | Regression/pass-fail driver for rectangle-extraction benchmarking. |
-| `test/gcd_fill_svg.tcl` | Batch-mode SVG export driver for fill-area visualization. |
-| `test/gcd_tile_grid_density.tcl` | Verifies total metal area remains invariant across tile/grid dissections. |
-| `test/gcd_fixed_dissection_lp.tcl` | Loads the GCD layout, solves the LP for each configured layer, and checks the density-map SVG outputs. |
-| `test/cpp/FillUtillTest.cpp` | Unit tests sliding-window density calculation, boundary exclusion, and the OR-Tools LP objective. |
-| `test/cpp/CMakeLists.txt` | CMake registration for the FIN C++ unit test. |
-| `test/run_fin_rectangle_scaling.sh` | Runs rectangle-extraction scaling experiments over copy counts. |
-| `test/run_gcd_fill_svg_sweep.sh` | Generates SVG results for a sweep of non-OPC spacing values. |
-| `test/fin_readme_msgs_check.py`, `test/fin_readme_msgs_check.ok` | Validates FIN README/message metadata generated by the project checks. |
+MinVar maximizes the minimum post-fill window metal area; it does not directly
+minimize statistical variance. All LP placement commands share the same
+candidate and placement path. The comparison scripts
+`test/script/gcd_fill_method_comparison.tcl` and
+`test/script/gcd_lip_lp_comparison.tcl` use these commands and analyze actual
+placed geometry with `tile_grid_metal_area`.
 
-#### Dependency comparison
+## Six-method GCD and IBEX comparisons
 
-```text
-Original OpenROAD path
-  density_fill -> Finale -> DensityFill
-                            |- private rule parser
-                            |- private orNonFills collector
-                            `- fill placement
+From the repository root, run:
 
-Current shared path
-  density_fill -> Finale -> DensityFill -+
-                                        |- FillConfig
-  min_var_fill -> Finale -> MinVarFill -+-- FillGeometry -> OpenDB / Boost Polygon
-  fixed_dissection_lp -> Finale -------+-- FillUtill -> sliding tile/windows
-                                        `- FixedDissectionLp -> OR-Tools GLOP
+```shell
+python3 src/fin/test/script/run_gcd_six_method_comparison.py
+python3 src/fin/test/script/run_ibex_six_method_comparison.py
 ```
 
-### Data flow
+The driver launches six independent OpenROAD processes, each reading the same
+GCD or IBEX prefill DEF: Density, MinVar, MinFillAmount, Lip1, Lip2, and Lip3. Use a
+binary rebuilt with the current FIN commands. Defaults are a 50-micron window,
+resolution 2, minimum tile density 0.20, and window density bounds 0.30–0.60.
+Density uses its original JSON-rule-based algorithm, not the LP density bounds;
+all methods are evaluated with the same post-fill analysis bounds.
 
-1. `density_fill`, `min_var_fill`, `tile_grid_metal_area`, or
-   `fixed_dissection_lp` parses Tcl options in `finale.tcl`.
-2. `finale.i` calls the appropriate `Finale` method through SWIG.
-3. `Finale` creates `DensityFill` or `MinVarFill`.
-4. The implementation loads per-layer rules through `FillConfig` and obtains
-   existing metal geometry with `orNonFills` from `FillGeometry`.
-5. Boost Polygon computes legal fill regions; the implementation inserts
-   selected rectangles into OpenDB as `dbFill` objects.
-6. `fixed_dissection_lp` builds tile capacities and sliding-window constraints
-   for each configured layer, then invokes OR-Tools GLOP. It reports ideal
-   planned fill area but does not create `dbFill` objects.
-7. In GUI debug mode, `Graphics` renders the intermediate polygon regions.
+Options include `--openroad`, `--rules`, `--output`, `--resolution`, `--window`,
+the four `--min/max-tile/window-density` options, `--algorithms alg3`, `--svg`,
+and `--dry-run`. Output directories must be new to avoid overwriting results.
+
+Results are saved under `test/results/<date>/gcd/six_method_comparison_<time>/`.
+The IBEX driver uses `test/results/<date>/ibex/six_method_comparison_<time>/`.
+`summary.csv` contains per-layer grid density statistics and exact floating
+density extrema; `summary.json` records method status and timings. Area and
+timing columns are method totals repeated on each layer row. Density has no
+LP-returned placed area, so that column is empty; `added_metal_area_dbu2`
+measures the common post-minus-pre metal union area for every method. Each
+method directory contains `run.log`, before/after density JSON, exact profiles,
+and the LP report when applicable. Failures are logged without skipping later
+methods; the driver exits nonzero if any method fails.
 
 ## Example scripts
 

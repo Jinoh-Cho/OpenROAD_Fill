@@ -1,12 +1,51 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2020-2025, The OpenROAD Authors
 
-proc density_fill_debug { args } {
-  fin::set_density_fill_debug_cmd
+# Internal option conversion shared by the public FIN commands.
+namespace eval fin {}
+
+proc fin::get_option { keys_var option default } {
+  upvar 1 $keys_var options
+  if { [info exists options($option)] } { return $options($option) }
+  return $default
 }
 
-proc min_var_fill_debug { args } {
-  fin::set_min_var_fill_debug_cmd
+proc fin::get_fill_region { keys_var area_error } {
+  upvar 1 $keys_var options
+  if { ![info exists options(-area)] } { return [ord::get_db_core] }
+  if { [llength $options(-area)] != 4 } {
+    utl::error FIN $area_error "The -area argument must be a list of 4 coordinates."
+  }
+  set coordinates [lmap coordinate $options(-area) {
+    ord::microns_to_dbu $coordinate
+  }]
+  return [odb::Rect x {*}$coordinates]
+}
+
+proc fin::get_grid_parameters { keys_var area_error origin_error } {
+  upvar 1 $keys_var options
+  set region [fin::get_fill_region options $area_error]
+  set offset [fin::get_option options -origin {0 0}]
+  if { [llength $offset] != 2 } {
+    utl::error FIN $origin_error "The -origin argument must be a list of 2 coordinates."
+  }
+  lassign $offset ox oy
+  # Interpret -origin as an offset from the lower-left corner of the region.
+  set origin_x [expr {[$region xMin] + [ord::microns_to_dbu $ox]}]
+  set origin_y [expr {[$region yMin] + [ord::microns_to_dbu $oy]}]
+  return [list $region [odb::Point x $origin_x $origin_y] \
+    [ord::microns_to_dbu $options(-window)] \
+    [fin::get_option options -resolution 4]]
+}
+
+proc fin::get_density_option { keys_var option default error_id } {
+  upvar 1 $keys_var options
+  if { ![info exists options($option)] } { return $default }
+  set value $options($option)
+  if { ![string is double -strict $value] || $value < 0.0 || $value > 1.0 } {
+    utl::error FIN $error_id "The $option argument must be between 0.0 and 1.0."
+  }
+  return $value
 }
 
 sta::define_cmd_args "density_fill" {[-rules rules_file]\
@@ -22,94 +61,9 @@ proc density_fill { args } {
     utl::error FIN 7 "The -rules argument must be specified."
   }
 
-  if { [info exists keys(-area)] } {
-    set area $keys(-area)
-    if { [llength $area] != 4 } {
-      utl::error FIN 8 "The -area argument must be a list of 4 coordinates."
-    }
-    lassign $area lx ly ux uy
-    set lx [ord::microns_to_dbu $lx]
-    set ly [ord::microns_to_dbu $ly]
-    set ux [ord::microns_to_dbu $ux]
-    set uy [ord::microns_to_dbu $uy]
-    set fill_area [odb::Rect x $lx $ly $ux $uy]
-  } else {
-    set fill_area [ord::get_db_core]
-  }
+  set fill_area [fin::get_fill_region keys 8]
 
   fin::density_fill_cmd $rules_file $fill_area
-}
-
-sta::define_cmd_args "min_var_fill" {[-rules rules_file]\
-                                     [-area {lx ly ux uy}]}
-
-proc min_var_fill { args } {
-  sta::parse_key_args "min_var_fill" args \
-    keys {-rules -area} flags {}
-
-  if { [info exists keys(-rules)] } {
-    set rules_file $keys(-rules)
-  } else {
-    utl::error FIN 28 "The -rules argument must be specified."
-  }
-
-  if { [info exists keys(-area)] } {
-    set area $keys(-area)
-    if { [llength $area] != 4 } {
-      utl::error FIN 29 "The -area argument must be a list of 4 coordinates."
-    }
-    lassign $area lx ly ux uy
-    set lx [ord::microns_to_dbu $lx]
-    set ly [ord::microns_to_dbu $ly]
-    set ux [ord::microns_to_dbu $ux]
-    set uy [ord::microns_to_dbu $uy]
-    set fill_area [odb::Rect x $lx $ly $ux $uy]
-  } else {
-    set fill_area [ord::get_db_core]
-  }
-
-  fin::min_var_fill_cmd $rules_file $fill_area
-}
-
-sta::define_cmd_args "density_fill_rectangle_extraction_benchmark" \
-  {[-rules rules_file] [-area {lx ly ux uy}] [-left copies] [-right copies] [-bottom copies] [-top copies] [-runs runs]}
-
-proc density_fill_rectangle_extraction_benchmark { args } {
-  sta::parse_key_args "density_fill_rectangle_extraction_benchmark" args \
-    keys {-rules -area -left -right -bottom -top -runs} flags {}
-
-  if { ![info exists keys(-rules)] } {
-    utl::error FIN 13 "The -rules argument must be specified."
-  }
-  set rules_file $keys(-rules)
-
-  if { [info exists keys(-area)] } {
-    set area $keys(-area)
-    if { [llength $area] != 4 } {
-      utl::error FIN 14 "The -area argument must be a list of 4 coordinates."
-    }
-    lassign $area lx ly ux uy
-    set fill_area [odb::Rect x [ord::microns_to_dbu $lx] [ord::microns_to_dbu $ly] \
-                           [ord::microns_to_dbu $ux] [ord::microns_to_dbu $uy]]
-  } else {
-    set fill_area [ord::get_db_core]
-  }
-
-  foreach {option value} {-left 0 -right 0 -bottom 0 -top 0 -runs 1} {
-    if { [info exists keys($option)] } {
-      set value $keys($option)
-    }
-    if { ![string is integer -strict $value] || $value < 0 } {
-      utl::error FIN 15 "$option must be a non-negative integer."
-    }
-    set [string range $option 1 end] $value
-  }
-  if { $runs == 0 } {
-    utl::error FIN 16 "-runs must be greater than zero."
-  }
-
-  fin::density_fill_rectangle_extraction_benchmark_cmd \
-    $rules_file $fill_area $left $right $bottom $top $runs
 }
 
 sta::define_cmd_args "tile_grid_metal_area" \
@@ -121,103 +75,22 @@ proc tile_grid_metal_area { args } {
   if { ![info exists keys(-rules)] || ![info exists keys(-window)] } {
     utl::error FIN 18 "The -rules and -window arguments must be specified."
   }
-  set region [ord::get_db_core]
-  if { [info exists keys(-area)] } {
-    lassign $keys(-area) lx ly ux uy
-    set region [odb::Rect x [ord::microns_to_dbu $lx] [ord::microns_to_dbu $ly] \
-                           [ord::microns_to_dbu $ux] [ord::microns_to_dbu $uy]]
-  }
-  set origin {0 0}
-  if { [info exists keys(-origin)] } { set origin $keys(-origin) }
-  lassign $origin ox oy
-  # Interpret -origin as an offset from the lower-left corner of the region.
-  set origin_x [expr {[$region xMin] + [ord::microns_to_dbu $ox]}]
-  set origin_y [expr {[$region yMin] + [ord::microns_to_dbu $oy]}]
-  set resolution 4
-  if { [info exists keys(-resolution)] } { set resolution $keys(-resolution) }
-  set min_window_density 0.0
-  if { [info exists keys(-min_window_density)] } {
-    set min_window_density $keys(-min_window_density)
-  }
-  if { ![string is double -strict $min_window_density] \
-       || $min_window_density < 0.0 || $min_window_density > 1.0 } {
-    utl::error FIN 64 "The -min_window_density argument must be between 0.0 and 1.0."
-  }
-  set max_density -1.0
-  if { [info exists keys(-max_density)] } {
-    set max_density $keys(-max_density)
-    if { ![string is double -strict $max_density] \
-         || $max_density < 0.0 || $max_density > 1.0 } {
-      utl::error FIN 60 "The -max_density argument must be between 0.0 and 1.0."
-    }
-  }
-  set svg_file ""
-  if { [info exists keys(-svg)] } { set svg_file $keys(-svg) }
-  set density_report_file ""
-  if { [info exists keys(-density_report)] } {
-    set density_report_file $keys(-density_report)
-  }
-  set floating_density_profile_file ""
-  if { [info exists keys(-floating_density_profile)] } {
-    set floating_density_profile_file $keys(-floating_density_profile)
-  }
-  set floating_density_algorithm alg3
-  if { [info exists keys(-floating_density_algorithm)] } {
-    set floating_density_algorithm $keys(-floating_density_algorithm)
-  }
+  lassign [fin::get_grid_parameters keys 68 69] region origin window resolution
+  set min_window_density [fin::get_density_option keys -min_window_density 0.0 64]
+  set max_density [fin::get_density_option keys -max_density -1.0 60]
+  set svg_file [fin::get_option keys -svg ""]
+  set density_report_file [fin::get_option keys -density_report ""]
+  set floating_density_profile_file [fin::get_option keys -floating_density_profile ""]
+  set floating_density_algorithm [fin::get_option keys -floating_density_algorithm alg3]
   if { $floating_density_algorithm ni {alg2 alg3} } {
     utl::error FIN 67 "-floating_density_algorithm must be alg2 or alg3."
   }
   return [fin::tile_grid_metal_area_cmd $keys(-rules) $region \
-    [odb::Point x $origin_x $origin_y] \
-    [ord::microns_to_dbu $keys(-window)] $resolution $min_window_density $max_density $svg_file $density_report_file $floating_density_profile_file $floating_density_algorithm]
+    $origin \
+    $window $resolution $min_window_density $max_density $svg_file $density_report_file $floating_density_profile_file $floating_density_algorithm]
 }
 
-sta::define_cmd_args "fixed_dissection_lp" \
-  {[-rules rules_file] [-area {lx ly ux uy}] -window window_size [-origin {x y}] [-resolution resolution] -max_density density [-svg file]}
-
-proc fixed_dissection_lp { args } {
-  sta::parse_key_args "fixed_dissection_lp" args \
-    keys {-rules -area -window -origin -resolution -max_density -svg} flags {}
-  foreach required {-rules -window -max_density} {
-    if { ![info exists keys($required)] } {
-      utl::error FIN 32 "The $required argument must be specified."
-    }
-  }
-  if { ![string is double -strict $keys(-max_density)] \
-       || $keys(-max_density) < 0.0 || $keys(-max_density) > 1.0 } {
-    utl::error FIN 33 "The -max_density argument must be between 0.0 and 1.0."
-  }
-
-  set region [ord::get_db_core]
-  if { [info exists keys(-area)] } {
-    set area $keys(-area)
-    if { [llength $area] != 4 } {
-      utl::error FIN 34 "The -area argument must be a list of 4 coordinates."
-    }
-    lassign $area lx ly ux uy
-    set region [odb::Rect x [ord::microns_to_dbu $lx] [ord::microns_to_dbu $ly] \
-                           [ord::microns_to_dbu $ux] [ord::microns_to_dbu $uy]]
-  }
-  set origin {0 0}
-  if { [info exists keys(-origin)] } { set origin $keys(-origin) }
-  if { [llength $origin] != 2 } {
-    utl::error FIN 35 "The -origin argument must be a list of 2 coordinates."
-  }
-  lassign $origin ox oy
-  set origin_x [expr {[$region xMin] + [ord::microns_to_dbu $ox]}]
-  set origin_y [expr {[$region yMin] + [ord::microns_to_dbu $oy]}]
-  set resolution 4
-  if { [info exists keys(-resolution)] } { set resolution $keys(-resolution) }
-  set svg_file ""
-  if { [info exists keys(-svg)] } { set svg_file $keys(-svg) }
-  return [fin::fixed_dissection_lp_cmd $keys(-rules) $region \
-    [odb::Point x $origin_x $origin_y] \
-    [ord::microns_to_dbu $keys(-window)] $resolution $keys(-max_density) \
-    $svg_file]
-}
-
-sta::define_cmd_args "fixed_dissection_lp_fill" \
+sta::define_cmd_args "fixed_dissection_lp_min_var_fill" \
   {[-rules rules_file] [-area {lx ly ux uy}] -window window_size [-origin {x y}] [-resolution resolution] [-min_tile_density density] [-max_tile_density density] [-min_window_density density] [-max_window_density density] [-svg file] [-density_report file]}
 
 sta::define_cmd_args "fixed_dissection_lp_min_amount_fill" \
@@ -226,9 +99,8 @@ sta::define_cmd_args "fixed_dissection_lp_min_amount_fill" \
 sta::define_cmd_args "fixed_dissection_lp_lip_fill" \
   {[-rules rules_file] [-area {lx ly ux uy}] -window window_size -lip_type {1|2|3} [-origin {x y}] [-resolution resolution] [-min_tile_density density] [-max_tile_density density] [-min_window_density density] [-max_window_density density] [-svg file] [-density_report file]}
 
-proc fixed_dissection_lp_fill_impl { command_name args } {
-  sta::parse_key_args $command_name args \
-    keys {-rules -area -window -origin -resolution -min_tile_density -max_tile_density -min_window_density -max_window_density -svg -density_report -lip_type} flags {}
+proc fin::lp_fill_impl { command_name keys_var } {
+  upvar 1 $keys_var keys
   if { $command_name eq "fin::fixed_dissection_lp_lip_fill_cmd" \
        && (![info exists keys(-lip_type)] || $keys(-lip_type) ni {1 2 3}) } {
     utl::error FIN 64 "The -lip_type argument must be 1, 2, or 3."
@@ -238,129 +110,43 @@ proc fixed_dissection_lp_fill_impl { command_name args } {
       utl::error FIN 42 "The $required argument must be specified."
     }
   }
-  set max_window_density 1.0
-  if { [info exists keys(-max_window_density)] } {
-    set max_window_density $keys(-max_window_density)
-  }
-  if { ![string is double -strict $max_window_density] \
-       || $max_window_density < 0.0 || $max_window_density > 1.0 } {
-    utl::error FIN 43 "The -max_window_density argument must be between 0.0 and 1.0."
-  }
-  set min_tile_density 0.0
-  if { [info exists keys(-min_tile_density)] } {
-    set min_tile_density $keys(-min_tile_density)
-  }
-  if { ![string is double -strict $min_tile_density] \
-       || $min_tile_density < 0.0 || $min_tile_density > 1.0 } {
-    utl::error FIN 49 "The -min_tile_density argument must be between 0.0 and 1.0."
-  }
-  set max_tile_density 1.0
-  if { [info exists keys(-max_tile_density)] } {
-    set max_tile_density $keys(-max_tile_density)
-  }
-  if { ![string is double -strict $max_tile_density] \
-       || $max_tile_density < 0.0 || $max_tile_density > 1.0 } {
-    utl::error FIN 62 "The -max_tile_density argument must be between 0.0 and 1.0."
-  }
+  set max_window_density [fin::get_density_option keys -max_window_density 1.0 43]
+  set min_tile_density [fin::get_density_option keys -min_tile_density 0.0 49]
+  set max_tile_density [fin::get_density_option keys -max_tile_density 1.0 62]
   if { $min_tile_density > $max_tile_density } {
     utl::error FIN 63 "The -min_tile_density argument cannot exceed -max_tile_density."
   }
-  set min_window_density 0.0
-  if { [info exists keys(-min_window_density)] } {
-    set min_window_density $keys(-min_window_density)
-  }
-  if { ![string is double -strict $min_window_density] \
-       || $min_window_density < 0.0 || $min_window_density > 1.0 } {
-    utl::error FIN 61 "The -min_window_density argument must be between 0.0 and 1.0."
-  }
-  set region [ord::get_db_core]
-  if { [info exists keys(-area)] } {
-    set area $keys(-area)
-    if { [llength $area] != 4 } {
-      utl::error FIN 44 "The -area argument must be a list of 4 coordinates."
-    }
-    lassign $area lx ly ux uy
-    set region [odb::Rect x [ord::microns_to_dbu $lx] [ord::microns_to_dbu $ly] \
-                           [ord::microns_to_dbu $ux] [ord::microns_to_dbu $uy]]
-  }
-  set origin {0 0}
-  if { [info exists keys(-origin)] } { set origin $keys(-origin) }
-  if { [llength $origin] != 2 } {
-    utl::error FIN 45 "The -origin argument must be a list of 2 coordinates."
-  }
-  lassign $origin ox oy
-  set origin_x [expr {[$region xMin] + [ord::microns_to_dbu $ox]}]
-  set origin_y [expr {[$region yMin] + [ord::microns_to_dbu $oy]}]
-  set resolution 4
-  if { [info exists keys(-resolution)] } { set resolution $keys(-resolution) }
-  set svg_file ""
-  if { [info exists keys(-svg)] } { set svg_file $keys(-svg) }
-  set density_report_file ""
-  if { [info exists keys(-density_report)] } {
-    set density_report_file $keys(-density_report)
-  }
+  set min_window_density [fin::get_density_option keys -min_window_density 0.0 61]
+  lassign [fin::get_grid_parameters keys 44 45] region origin window resolution
+  set svg_file [fin::get_option keys -svg ""]
+  set density_report_file [fin::get_option keys -density_report ""]
   if { $command_name eq "fin::fixed_dissection_lp_lip_fill_cmd" } {
     return [$command_name $keys(-rules) $region \
-      [odb::Point x $origin_x $origin_y] \
-      [ord::microns_to_dbu $keys(-window)] $resolution $min_tile_density \
+      $origin \
+      $window $resolution $min_tile_density \
       $max_tile_density $min_window_density $max_window_density \
       $keys(-lip_type) $svg_file $density_report_file]
   }
   return [{*}$command_name $keys(-rules) $region \
-    [odb::Point x $origin_x $origin_y] \
-    [ord::microns_to_dbu $keys(-window)] $resolution $min_tile_density $max_tile_density $min_window_density $max_window_density \
+    $origin \
+    $window $resolution $min_tile_density $max_tile_density $min_window_density $max_window_density \
     $svg_file $density_report_file]
 }
 
-proc fixed_dissection_lp_fill { args } {
-  return [fixed_dissection_lp_fill_impl fin::fixed_dissection_lp_fill_cmd {*}$args]
+proc fixed_dissection_lp_min_var_fill { args } {
+  sta::parse_key_args "fixed_dissection_lp_min_var_fill" args \
+    keys {-rules -area -window -origin -resolution -min_tile_density -max_tile_density -min_window_density -max_window_density -svg -density_report -lip_type} flags {}
+  return [fin::lp_fill_impl fin::fixed_dissection_lp_min_var_fill_cmd keys]
 }
 
 proc fixed_dissection_lp_min_amount_fill { args } {
-  return [fixed_dissection_lp_fill_impl fin::fixed_dissection_lp_min_amount_fill_cmd {*}$args]
+  sta::parse_key_args "fixed_dissection_lp_min_amount_fill" args \
+    keys {-rules -area -window -origin -resolution -min_tile_density -max_tile_density -min_window_density -max_window_density -svg -density_report -lip_type} flags {}
+  return [fin::lp_fill_impl fin::fixed_dissection_lp_min_amount_fill_cmd keys]
 }
 
 proc fixed_dissection_lp_lip_fill { args } {
-  return [fixed_dissection_lp_fill_impl \
-    fin::fixed_dissection_lp_lip_fill_cmd {*}$args]
-}
-
-sta::define_cmd_args "multilevel_fixed_dissection_lp" \
-  {[-rules rules_file] [-area {lx ly ux uy}] -window window_size [-origin {x y}] [-resolution resolution] -accuracy relative_accuracy -max_density density [-svg file]}
-
-proc multilevel_fixed_dissection_lp { args } {
-  sta::parse_key_args "multilevel_fixed_dissection_lp" args \
-    keys {-rules -area -window -origin -resolution -accuracy -max_density -svg} flags {}
-  foreach required {-rules -window -accuracy -max_density} {
-    if { ![info exists keys($required)] } {
-      utl::error FIN 39 "The $required argument must be specified."
-    }
-  }
-  if { ![string is double -strict $keys(-accuracy)] \
-       || $keys(-accuracy) <= 0.0 || $keys(-accuracy) > 1.0 } {
-    utl::error FIN 40 "The -accuracy argument must be in (0.0, 1.0]."
-  }
-  if { ![string is double -strict $keys(-max_density)] \
-       || $keys(-max_density) < 0.0 || $keys(-max_density) > 1.0 } {
-    utl::error FIN 41 "The -max_density argument must be between 0.0 and 1.0."
-  }
-  set region [ord::get_db_core]
-  if { [info exists keys(-area)] } {
-    lassign $keys(-area) lx ly ux uy
-    set region [odb::Rect x [ord::microns_to_dbu $lx] [ord::microns_to_dbu $ly] \
-                           [ord::microns_to_dbu $ux] [ord::microns_to_dbu $uy]]
-  }
-  set origin {0 0}
-  if { [info exists keys(-origin)] } { set origin $keys(-origin) }
-  lassign $origin ox oy
-  set origin_x [expr {[$region xMin] + [ord::microns_to_dbu $ox]}]
-  set origin_y [expr {[$region yMin] + [ord::microns_to_dbu $oy]}]
-  set resolution 4
-  if { [info exists keys(-resolution)] } { set resolution $keys(-resolution) }
-  set svg_file ""
-  if { [info exists keys(-svg)] } { set svg_file $keys(-svg) }
-  return [fin::multilevel_fixed_dissection_lp_cmd $keys(-rules) $region \
-    [odb::Point x $origin_x $origin_y] \
-    [ord::microns_to_dbu $keys(-window)] $resolution $keys(-accuracy) \
-    $keys(-max_density) $svg_file]
+  sta::parse_key_args "fixed_dissection_lp_lip_fill" args \
+    keys {-rules -area -window -origin -resolution -min_tile_density -max_tile_density -min_window_density -max_window_density -svg -density_report -lip_type} flags {}
+  return [fin::lp_fill_impl fin::fixed_dissection_lp_lip_fill_cmd keys]
 }

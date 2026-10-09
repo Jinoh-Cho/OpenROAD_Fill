@@ -38,7 +38,7 @@ set result_name "gcd_fixed_dissection_lp_fill_min_${min_tag}_max_${max_tag}"
 set svg_file "$results_dir/$result_name.svg"
 set density_report "$results_dir/${result_name}_density.json"
 
-set placed_fill [fixed_dissection_lp_fill \
+set placed_fill [fixed_dissection_lp_min_var_fill \
   -rules $rules \
   -window 50 \
   -origin {0 0} \

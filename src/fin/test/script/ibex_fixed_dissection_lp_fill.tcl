@@ -24,7 +24,7 @@ set svg_file "$results_dir/ibex_fixed_dissection_lp_fill.svg"
 set density_report "$results_dir/ibex_fixed_dissection_lp_fill_density.json"
 checkpoint $flow_start "4/6 Building LP tile targets, solving the LP, placing fill, and writing SVG"
 if {[catch {
-  set placed_fill [fixed_dissection_lp_fill \
+  set placed_fill [fixed_dissection_lp_min_var_fill \
     -rules "$test_dir/fill.json" \
     -window 50 \
     -origin {0 0} \

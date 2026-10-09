@@ -30,18 +30,4 @@ struct FixedDissectionLpResult
   std::vector<double> fill_areas;
 };
 
-enum class FixedDissectionLpObjective
-{
-  kMaximizeMinimumWindowArea,
-  kMinimizeTotalFillArea
-};
-
-// Solve J40 equations (2)-(5): maximize the minimum post-fill window area,
-// subject to tile fill capacities and density bounds in every window.
-// Throws std::invalid_argument when the problem dimensions are inconsistent.
-FixedDissectionLpResult solveFixedDissectionLp(
-    const FixedDissectionLpProblem& problem,
-    FixedDissectionLpObjective objective
-    = FixedDissectionLpObjective::kMaximizeMinimumWindowArea);
-
 }  // namespace fin

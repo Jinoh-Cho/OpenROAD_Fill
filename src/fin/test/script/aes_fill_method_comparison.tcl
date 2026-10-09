@@ -18,7 +18,7 @@ set fill_start [clock milliseconds]
 switch -- $method {
   density { density_fill -rules $rules }
   lp_minvar {
-    set placed_fill [fixed_dissection_lp_fill -rules $rules -window 50 \
+    set placed_fill [fixed_dissection_lp_min_var_fill -rules $rules -window 50 \
       -origin {0 0} -resolution 2 -min_tile_density 0.20 \
       -min_window_density 0.30 -max_window_density 0.60]
     puts "placed_fill_area=$placed_fill DBU^2"

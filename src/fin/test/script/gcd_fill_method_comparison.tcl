@@ -45,9 +45,8 @@ switch -- $method {
     density_fill -rules $rules
   }
   lp_minvar {
-    # This is the actual LP objective: maximize the minimum window fill area.
-    # Do not use min_var_fill here; it currently only generates candidates.
-    set placed_fill [fixed_dissection_lp_fill \
+    # Maximize the minimum post-fill window metal area, then place legal fills.
+    set placed_fill [fixed_dissection_lp_min_var_fill \
       -rules $rules \
       -window 50 \
       -origin {0 0} \

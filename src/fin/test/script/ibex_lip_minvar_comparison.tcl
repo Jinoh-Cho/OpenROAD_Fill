@@ -47,7 +47,7 @@ set fill_start [clock milliseconds]
 puts "Starting IBEX $method fill (resolution=$resolution, min_tile_density=$min_tile_density, min_window_density=$min_window_density)."
 flush stdout
 if {$method eq "lp_minvar"} {
-  set placed_fill [fixed_dissection_lp_fill \
+  set placed_fill [fixed_dissection_lp_min_var_fill \
     -rules $rules -window 50 -origin {0 0} -resolution $resolution \
     -min_tile_density $min_tile_density -min_window_density $min_window_density \
     -max_window_density 0.60]

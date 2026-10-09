@@ -12,7 +12,7 @@ set results_dir [file normalize "$test_dir/results/$run_date/gcd"]
 file mkdir $results_dir
 set svg_file "$results_dir/gcd_fixed_dissection_lp_fill.svg"
 set density_report "$results_dir/gcd_fixed_dissection_lp_fill_density.json"
-set placed_fill [fixed_dissection_lp_fill \
+set placed_fill [fixed_dissection_lp_min_var_fill \
   -rules "$test_dir/fill.json" \
   -window 50 \
   -origin {0 0} \
