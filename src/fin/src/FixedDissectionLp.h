@@ -3,7 +3,9 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
+#include <limits>
 #include <vector>
 
 namespace fin {
@@ -20,6 +22,29 @@ struct FixedDissectionLpProblem
   std::vector<double> feature_areas;
   std::vector<double> max_fill_areas;
   std::vector<std::vector<size_t>> windows;
+
+  // Omit an unattainable tile minimum while retaining its capacity and
+  // contribution to every window density constraint.
+  double minimumFillArea(size_t index) const
+  {
+    const double required = std::max(
+        min_tile_density * tile_areas[index] - feature_areas[index], 0.0);
+    return required <= max_fill_areas[index] ? required : 0.0;
+  }
+
+  double maximumFillArea(size_t index) const
+  {
+    const double budget
+        = max_tile_density * tile_areas[index] - feature_areas[index];
+    return budget < 0.0 ? max_fill_areas[index]
+                        : std::min(max_fill_areas[index], budget);
+  }
+
+  double maximumWindowFillArea(double window_area, double feature_area) const
+  {
+    const double budget = max_window_density * window_area - feature_area;
+    return budget < 0.0 ? std::numeric_limits<double>::infinity() : budget;
+  }
 };
 
 struct FixedDissectionLpResult

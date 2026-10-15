@@ -82,15 +82,8 @@ FixedDissectionLpResult solveFillLp(const FixedDissectionLpProblem& problem,
   std::vector<MPVariable*> fill_variables;
   fill_variables.reserve(problem.tile_areas.size());
   for (size_t index = 0; index < problem.tile_areas.size(); index++) {
-    const double min_fill_area
-        = std::max(problem.min_tile_density * problem.tile_areas[index]
-                       - problem.feature_areas[index],
-                   0.0);
-    const double max_tile_fill_area
-        = problem.max_tile_density * problem.tile_areas[index]
-          - problem.feature_areas[index];
-    const double max_fill_area
-        = std::min(problem.max_fill_areas[index], max_tile_fill_area);
+    const double min_fill_area = problem.minimumFillArea(index);
+    const double max_fill_area = problem.maximumFillArea(index);
     if (min_fill_area > max_fill_area) {
       return {};
     }
@@ -110,8 +103,8 @@ FixedDissectionLpResult solveFillLp(const FixedDissectionLpProblem& problem,
       window_area += problem.tile_areas[tile_index];
       feature_area += problem.feature_areas[tile_index];
     }
-    const double fill_budget = std::max(
-        problem.max_window_density * window_area - feature_area, 0.0);
+    const double fill_budget
+        = problem.maximumWindowFillArea(window_area, feature_area);
     MPConstraint* upper_bound = solver->MakeRowConstraint(
         -infinity, fill_budget, "upper_" + std::to_string(index));
     const double minimum_fill_area = std::max(

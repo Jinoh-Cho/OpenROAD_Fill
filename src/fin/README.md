@@ -71,11 +71,21 @@ fixed_dissection_lp_min_var_fill
     [-svg file]
 ```
 
-`-min_tile_density` and `-max_tile_density` are hard post-fill density bounds
-for every tile; `-max_tile_density` defaults to `1.0`.
+`-min_tile_density` is a post-fill density lower bound for each tile whose
+legal fill capacity can reach it. If the existing metal plus all legal fill
+candidates cannot reach this minimum, FIN warns and omits only that tile's
+minimum density constraint. The tile still contributes to window densities and
+retains its fill capacity.
+`-max_tile_density` is an upper bound for every tile and defaults to `1.0`.
+If existing wire metal already exceeds a tile or window maximum, FIN warns and
+omits that region's maximum density constraint. A region exactly at its maximum
+retains the constraint and cannot receive additional fill. Other regions retain
+their upper bounds, and legal fill capacity and spacing rules always apply.
 `-min_window_density` is an optional hard minimum post-fill density for every
-sliding window. `-max_window_density` remains the maximum density for every sliding
-window and defaults to `1.0`. If a tile's legal capacity, the sliding-window density bounds, or the
+sliding window. `-max_window_density` limits each sliding window unless existing
+metal already exceeds it, and defaults to `1.0`. Density reports still count
+violations against the requested limits, including regions whose constraints
+were omitted. If a tile's legal capacity, the remaining density bounds, or the
 discrete fill candidates cannot satisfy the constraints together, the command
 reports
 an infeasible error and does not retain any fill created by that command.

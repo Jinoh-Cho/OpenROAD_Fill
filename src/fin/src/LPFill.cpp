@@ -337,8 +337,14 @@ double LPFill::fillLp(const char* rules_filename,
         }
         const auto candidates_end = Clock::now();
 
+        size_t omitted_tile_maximums = 0;
+        size_t omitted_window_maximums = 0;
         for (size_t tile_index = 0; tile_index < grid.tiles().size();
              tile_index++) {
+          if (problem.feature_areas[tile_index]
+              > max_tile_density * problem.tile_areas[tile_index]) {
+            omitted_tile_maximums++;
+          }
           const double required_fill_area
               = std::max(min_tile_density * problem.tile_areas[tile_index]
                              - problem.feature_areas[tile_index],
@@ -349,14 +355,10 @@ double LPFill::fillLp(const char* rules_filename,
                 = (problem.feature_areas[tile_index]
                    + problem.max_fill_areas[tile_index])
                   / problem.tile_areas[tile_index];
-            tile_violations.push_back({tile_index,
-                                       TileViolationReason::kCapacity,
-                                       min_tile_density,
-                                       max_tile_density});
-            logger_->error(
+            logger_->warn(
                 FIN,
                 50,
-                "Fixed-dissection LP fill is infeasible on layer {}: tile {} "
+                "Omitting minimum tile density constraint on layer {}: tile {} "
                 "({}, {})-({}, {}) requires minimum density {:.6f}, but its "
                 "legal fill capacity reaches only {:.6f}.",
                 layer->getConstName(),
@@ -377,22 +379,16 @@ double LPFill::fillLp(const char* rules_filename,
           double window_area = 0.0;
           double feature_area = 0.0;
           for (const size_t tile_index : problem.windows[window_index]) {
-            tile_minimum_fill_area
-                += std::max(min_tile_density * problem.tile_areas[tile_index]
-                                - problem.feature_areas[tile_index],
-                            0.0);
-            const double max_tile_fill_area
-                = max_tile_density * problem.tile_areas[tile_index]
-                  - problem.feature_areas[tile_index];
-            maximum_legal_fill_area
-                += std::max(std::min(problem.max_fill_areas[tile_index],
-                                     max_tile_fill_area),
-                            0.0);
+            tile_minimum_fill_area += problem.minimumFillArea(tile_index);
+            maximum_legal_fill_area += problem.maximumFillArea(tile_index);
             window_area += problem.tile_areas[tile_index];
             feature_area += problem.feature_areas[tile_index];
           }
+          if (feature_area > max_window_density * window_area) {
+            omitted_window_maximums++;
+          }
           const double fill_budget
-              = std::max(max_window_density * window_area - feature_area, 0.0);
+              = problem.maximumWindowFillArea(window_area, feature_area);
           const double window_minimum_fill_area = std::max(
               problem.min_window_density * window_area - feature_area, 0.0);
           const double required_fill_area
@@ -415,6 +411,16 @@ double LPFill::fillLp(const char* rules_filename,
               diagnostic_fill_budget = fill_budget;
             }
           }
+        }
+        if (omitted_tile_maximums != 0 || omitted_window_maximums != 0) {
+          logger_->warn(FIN,
+                        70,
+                        "Omitting maximum density constraints on layer {}: "
+                        "{} tiles and {} windows already exceed their limits "
+                        "with existing metal.",
+                        layer->getConstName(),
+                        omitted_tile_maximums,
+                        omitted_window_maximums);
         }
         if (!window_violations.empty()) {
           logger_->error(FIN,
