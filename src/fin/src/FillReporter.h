@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -55,6 +57,29 @@ struct LPFillDensityReport
   double placement_seconds;
   double compute_seconds;
   double svg_seconds;
+  std::string solver_status;
+  int solver_status_code = -1;
+  std::string diagnostics_prefix;
+  double diagnostics_seconds = 0.0;
+  double candidate_generation_seconds = 0.0;
+  double candidate_generation_work_seconds = 0.0;
+  int candidate_threads = 1;
+  int candidate_prepare_threads = 1;
+  double placement_prepare_seconds = 0.0;
+  double placement_prepare_work_seconds = 0.0;
+  double db_insert_seconds = 0.0;
+  double post_fill_density_seconds = 0.0;
+  int placement_threads = 1;
+  double placement_select_seconds = 0.0;
+  double placement_select_work_seconds = 0.0;
+  std::map<std::string, double> placement_phase_seconds{};
+  std::map<std::string, double> candidate_phase_seconds{};
+  std::string lp_solver = "unknown";
+  int64_t solver_iterations = -1;
+  double min_post_fill_tile_density = 0.0;
+  double max_post_fill_tile_density = 0.0;
+  size_t min_violation_tile_count = 0;
+  size_t max_violation_tile_count = 0;
 };
 
 void writeFloatingDensityProfile(const std::string& profile_filename,

@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iomanip>
 
+#include "LpDiagnostics.h"
 #include "utl/Logger.h"
 
 namespace fin {
@@ -169,8 +170,30 @@ void writeLPFillDensityReport(
                << ", \"max_violation_window_count\": "
                << entry.max_violation_window_count;
         writeWindowDensityHistogram(report, entry.histogram);
+        if (entry.solved) {
+          report << ", \"min_post_fill_tile_density\": "
+                 << entry.min_post_fill_tile_density
+                 << ", \"max_post_fill_tile_density\": "
+                 << entry.max_post_fill_tile_density
+                 << ", \"min_violation_tile_count\": "
+                 << entry.min_violation_tile_count
+                 << ", \"max_violation_tile_count\": "
+                 << entry.max_violation_tile_count;
+        }
+        report << ", \"lp_solver\": " << lpJsonString(entry.lp_solver)
+               << ", \"solver_iterations\": ";
+        if (entry.solver_iterations >= 0) {
+          report << entry.solver_iterations;
+        } else {
+          report << "null";
+        }
         report << ", \"solved\": " << (entry.solved ? "true" : "false")
-               << ", \"status\": \"" << (entry.solved ? "solved" : "infeasible")
+               << ", \"status\": \""
+               << (entry.solved ? "solved"
+                                : (entry.solver_status_code == 2
+                                           || entry.solver_status == "NOT_RUN"
+                                       ? "infeasible"
+                                       : "failed"))
                << "\""
                << ", \"tile_violation_count\": " << entry.tile_violation_count
                << ", \"window_violation_count\": "
@@ -178,26 +201,73 @@ void writeLPFillDensityReport(
         if (entry.solved) {
           report << "null";
         } else {
+          const bool has_location
+              = entry.infeasibility_reason
+                    == "window_lower_bound_exceeds_upper_bound"
+                || entry.infeasibility_reason
+                       == "window_lower_bound_exceeds_legal_capacity";
           report << "{\"reason\": \"" << entry.infeasibility_reason
-                 << "\", \"window_index\": " << entry.diagnostic_window_index
-                 << ", \"bounds\": [" << entry.diagnostic_window_bounds.xMin()
-                 << ", " << entry.diagnostic_window_bounds.yMin() << ", "
-                 << entry.diagnostic_window_bounds.xMax() << ", "
-                 << entry.diagnostic_window_bounds.yMax()
-                 << "], \"current_density\": "
-                 << entry.diagnostic_current_density
-                 << ", \"required_fill_area\": "
-                 << entry.diagnostic_required_fill_area
-                 << ", \"max_legal_fill_area\": "
-                 << entry.diagnostic_max_legal_fill_area
-                 << ", \"max_window_fill_budget\": "
-                 << entry.diagnostic_fill_budget << "}";
+                 << "\", \"solver_status\": "
+                 << lpJsonString(entry.solver_status)
+                 << ", \"solver_status_code\": " << entry.solver_status_code
+                 << ", \"diagnostics_file\": "
+                 << lpJsonString(entry.diagnostics_prefix + ".json")
+                 << ", \"window_index\": ";
+          if (has_location) {
+            report << entry.diagnostic_window_index << ", \"bounds\": ["
+                   << entry.diagnostic_window_bounds.xMin() << ", "
+                   << entry.diagnostic_window_bounds.yMin() << ", "
+                   << entry.diagnostic_window_bounds.xMax() << ", "
+                   << entry.diagnostic_window_bounds.yMax()
+                   << "], \"current_density\": "
+                   << entry.diagnostic_current_density
+                   << ", \"required_fill_area\": "
+                   << entry.diagnostic_required_fill_area
+                   << ", \"max_legal_fill_area\": "
+                   << entry.diagnostic_max_legal_fill_area
+                   << ", \"max_window_fill_budget\": "
+                   << entry.diagnostic_fill_budget;
+          } else {
+            report << "null, \"bounds\": null";
+          }
+          report << "}";
         }
         report << ", \"runtime_seconds\": {\"candidates\": "
-               << entry.candidate_seconds
+               << entry.candidate_seconds << ", \"candidate_generation\": "
+               << entry.candidate_generation_seconds
+               << ", \"candidate_generation_work\": "
+               << entry.candidate_generation_work_seconds
+               << ", \"candidate_threads\": " << entry.candidate_threads
+               << ", \"candidate_prepare_threads\": "
+               << entry.candidate_prepare_threads
                << ", \"lp_solve\": " << entry.solve_seconds
                << ", \"placement\": " << entry.placement_seconds
+               << ", \"placement_select\": " << entry.placement_select_seconds
+               << ", \"placement_select_work\": "
+               << entry.placement_select_work_seconds
+               << ", \"placement_prepare\": " << entry.placement_prepare_seconds
+               << ", \"placement_prepare_work\": "
+               << entry.placement_prepare_work_seconds
+               << ", \"db_insert\": " << entry.db_insert_seconds
+               << ", \"post_fill_density\": " << entry.post_fill_density_seconds
+               << ", \"placement_threads\": " << entry.placement_threads
+               << ", \"candidate_phases\": {";
+        bool first_candidate_phase = true;
+        for (const auto& [name, value] : entry.candidate_phase_seconds) {
+          report << (first_candidate_phase ? "" : ", ") << lpJsonString(name)
+                 << ": " << value;
+          first_candidate_phase = false;
+        }
+        report << "}, \"placement_phases\": {";
+        bool first_phase = true;
+        for (const auto& [name, value] : entry.placement_phase_seconds) {
+          report << (first_phase ? "" : ", ") << lpJsonString(name) << ": "
+                 << value;
+          first_phase = false;
+        }
+        report << "}"
                << ", \"compute\": " << entry.compute_seconds
+               << ", \"diagnostics\": " << entry.diagnostics_seconds
                << ", \"svg\": " << entry.svg_seconds << "}}"
                << (index + 1 == density_reports.size() ? "\n" : ",\n");
       }

@@ -7,6 +7,14 @@ set method $::env(FIN_FILL_METHOD)
 if {$method ni {lip1 lip2 lip3 lp_minvar}} {
   error "Unknown FIN_FILL_METHOD: $method"
 }
+set lp_threads 1
+if {[info exists ::env(FIN_LP_THREADS)]} {
+  set lp_threads $::env(FIN_LP_THREADS)
+}
+set lp_solver glop
+if {[info exists ::env(FIN_LP_SOLVER)]} {
+  set lp_solver $::env(FIN_LP_SOLVER)
+}
 set resolution 4
 if {[info exists ::env(FIN_RESOLUTION)]} {
   set resolution $::env(FIN_RESOLUTION)
@@ -48,19 +56,24 @@ puts "Starting IBEX $method fill (resolution=$resolution, min_tile_density=$min_
 flush stdout
 if {$method eq "lp_minvar"} {
   set placed_fill [fixed_dissection_lp_min_var_fill \
-    -rules $rules -window 50 -origin {0 0} -resolution $resolution \
+    -rules $rules -lp_solver $lp_solver -lp_threads $lp_threads -window 50 -origin {0 0} -resolution $resolution \
     -min_tile_density $min_tile_density -min_window_density $min_window_density \
     -max_window_density 0.60]
 } else {
   set lip_type [string range $method 3 end]
   set placed_fill [fixed_dissection_lp_lip_fill \
-    -rules $rules -window 50 -origin {0 0} -resolution $resolution \
+    -rules $rules -lp_solver $lp_solver -lp_threads $lp_threads -window 50 -origin {0 0} -resolution $resolution \
     -min_tile_density $min_tile_density -min_window_density $min_window_density \
     -max_window_density 0.60 -lip_type $lip_type]
 }
 puts "placed_fill_area=$placed_fill DBU^2"
 puts [format "FILL_RUNTIME: method=%s resolution=%s seconds=%.3f" $method $resolution \
   [expr {([clock milliseconds] - $fill_start) / 1000.0}]]
+
+if {[info exists ::env(FIN_SKIP_PROFILE)] && $::env(FIN_SKIP_PROFILE)} {
+  puts "pass (floating-density profile extraction skipped)"
+  exit
+}
 
 set algorithms {alg2 alg3}
 if {[info exists ::env(FIN_FLOATING_DENSITY_ALGORITHMS)]} {

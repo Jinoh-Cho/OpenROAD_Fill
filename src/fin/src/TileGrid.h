@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <map>
+#include <string>
 #include <vector>
 
 #include "DensityAnalysis.h"
@@ -33,7 +35,8 @@ class TileGrid
   // Calculate the metal area and density of every tile and density window.
   // The polygon set is a union, so overlapping shapes are counted once.
   void calculateMetalDensities(
-      const boost::polygon::polygon_90_set_data<int>& metal_shapes);
+      const boost::polygon::polygon_90_set_data<int>& metal_shapes,
+      std::map<std::string, double>* phase_seconds = nullptr);
   const std::vector<double>& metalDensities() const { return metal_densities_; }
   double totalMetalArea() const;
 

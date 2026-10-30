@@ -69,3 +69,6 @@ projectview.bazelproject
 tmp/
 
 .playwright-mcp
+
+# Generated expanded benchmark inputs.
+/src/fin/test/prefill_bench/expanded/

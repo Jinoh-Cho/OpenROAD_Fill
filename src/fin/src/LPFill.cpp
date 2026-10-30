@@ -6,7 +6,13 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
+#include <cstdlib>
+#include <ctime>
+#include <iomanip>
+#include <iostream>
 #include <iterator>
+#include <map>
 #include <numeric>
 #include <string>
 #include <utility>
@@ -20,6 +26,7 @@
 #include "FixedDissectionLp.h"
 #include "LPFillUtil.h"
 #include "LipLpFill.h"
+#include "LpDiagnostics.h"
 #include "MinFillAmountLp.h"
 #include "MinVarLP.h"
 #include "graphics.h"
@@ -209,8 +216,33 @@ double LPFill::fillLp(const char* rules_filename,
                       double max_window_density,
                       const char* svg_filename,
                       const char* density_report_filename,
-                      const FillMethod method)
+                      const FillMethod method,
+                      const char* lp_solver,
+                      int lp_threads,
+                      const char* lp_diagnostics,
+                      int candidate_threads,
+                      int placement_threads)
 {
+  FillLpSolver selected_solver;
+  if (lp_solver != nullptr && std::string(lp_solver) == "glop") {
+    selected_solver = FillLpSolver::Glop;
+  } else if (lp_solver != nullptr && std::string(lp_solver) == "pdlp") {
+    selected_solver = FillLpSolver::Pdlp;
+  } else {
+    throw std::invalid_argument("LP solver must be glop or pdlp.");
+  }
+  if (lp_threads < 1) {
+    throw std::invalid_argument("LP thread count must be positive.");
+  }
+  if (selected_solver != FillLpSolver::Pdlp && lp_threads != 1) {
+    throw std::invalid_argument("Multiple LP threads require the PDLP solver.");
+  }
+  if (candidate_threads < 1) {
+    throw std::invalid_argument("Candidate thread count must be positive.");
+  }
+  if (placement_threads < 1) {
+    throw std::invalid_argument("Placement thread count must be positive.");
+  }
   const bool minimize_total_fill_area = method == FillMethod::MinFillAmount;
   int lip_type = 0;
   switch (method) {
@@ -263,23 +295,35 @@ double LPFill::fillLp(const char* rules_filename,
                       layer->getConstName());
       }
 
+      lpfill::traceCandidate(std::string("layer=") + layer->getConstName()
+                             + " collect_non_fill begin");
       const Polygon90Set layer_shapes = orNonFills(block, layer);
+      lpfill::traceCandidate("collect_non_fill end; initial_density begin");
       grid.calculateMetalDensities(layer_shapes);
+      lpfill::traceCandidate("initial_density end; candidates begin");
       const auto candidates_start = Clock::now();
+      lpfill::traceCandidate("bloat_non_fill begin");
+      const auto bloat_start = Clock::now();
       const Polygon90Set bloated_non_fill
           = layer_shapes + config.non_opc.space_to_non_fill;
-      std::vector<double> bloated_non_fill_areas;
-      bloated_non_fill_areas.reserve(grid.tiles().size());
-      for (const Rect& tile : grid.tiles()) {
-        Polygon90Set tile_polygon;
-        tile_polygon
-            += makeRect(tile.xMin(), tile.yMin(), tile.xMax(), tile.yMax());
-        bloated_non_fill_areas.push_back(
-            boost::polygon::area(bloated_non_fill & tile_polygon));
-      }
+      const double bloat_seconds = seconds(bloat_start, Clock::now());
+      lpfill::traceCandidate("bloat_non_fill end");
+      auto layer_fill_areas = lpfill::makeLayerFillAreas(grid,
+                                                         bloated_non_fill,
+                                                         layer,
+                                                         config.non_opc,
+                                                         graphics_.get(),
+                                                         candidate_threads);
+      std::cout << "[Fill LP] candidate preparation layer="
+                << layer->getConstName()
+                << " candidate_prepare_threads=" << layer_fill_areas.threads
+                << std::endl;
+      auto candidate_phases = std::move(layer_fill_areas.phase_seconds);
+      candidate_phases["candidate_bloat_seconds"] = bloat_seconds;
+      const auto& bloated_non_fill_areas
+          = layer_fill_areas.bloated_non_fill_areas;
 
       std::vector<std::vector<Rectangle>> tile_candidates;
-      tile_candidates.reserve(grid.tiles().size());
       std::vector<Polygon90> fillable_polygons;
       std::vector<double> fillable_region_areas;
       fillable_region_areas.reserve(grid.tiles().size());
@@ -294,31 +338,71 @@ double LPFill::fillLp(const char* rules_filename,
       double diagnostic_required_fill_area = 0.0;
       double diagnostic_max_legal_fill_area = 0.0;
       double diagnostic_fill_budget = 0.0;
+      FixedDissectionLpProblem problem;
+      FixedDissectionLpResult result;
+      double diagnostic_candidate_seconds = 0.0;
+      double candidate_generation_seconds = 0.0;
+      double candidate_generation_work_seconds = 0.0;
+      int actual_candidate_threads = 1;
+      double diagnostic_solve_seconds = 0.0;
+      const std::string diagnostics_base
+          = lp_diagnostics != nullptr && lp_diagnostics[0] != '\0'
+                ? lp_diagnostics
+                : "fin_lp_failure";
+      problem.diagnostics_prefix
+          = diagnostics_base + "_" + layer->getConstName();
       try {
-        FixedDissectionLpProblem problem;
+        problem.lp_solver = selected_solver;
+        problem.lp_threads = lp_threads;
+        const char* solver_log = std::getenv("FIN_LP_SOLVER_LOG");
+        problem.solver_log
+            = solver_log != nullptr && std::string(solver_log) == "1";
+        const char* dual_tolerance = std::getenv("FIN_LP_DUAL_TOLERANCE");
+        if (dual_tolerance != nullptr) {
+          const std::string value(dual_tolerance);
+          size_t consumed = 0;
+          problem.dual_tolerance = std::stod(value, &consumed);
+          if (consumed != value.size() || !std::isfinite(problem.dual_tolerance)
+              || problem.dual_tolerance < 0.0) {
+            throw std::invalid_argument("Invalid FIN_LP_DUAL_TOLERANCE.");
+          }
+        }
         problem.max_window_density = max_window_density;
         problem.min_tile_density = min_tile_density;
         problem.max_tile_density = max_tile_density;
-        // Placement rounds a continuous LP area down to legal rectangles.
-        // Keep a small guard only for the minimum-amount objective so the
-        // placed, rather than merely planned, fill meets the user limit.
-        problem.min_window_density
-            = minimize_total_fill_area
-                  ? std::min(min_window_density + 5e-4, max_window_density)
-                  : min_window_density;
+        problem.min_window_density = min_window_density;
         problem.feature_areas = grid.metalAreas();
         problem.windows = grid.windowTileIndices();
         problem.tile_areas.reserve(grid.tiles().size());
         problem.max_fill_areas.reserve(grid.tiles().size());
-        for (const Rect& tile : grid.tiles()) {
-          Polygon90Set tile_fillable_area;
-          std::vector<Rectangle> candidates
-              = lpfill::makeTileFillCandidates(tile,
-                                               layer_shapes,
-                                               layer,
-                                               config.non_opc,
-                                               graphics_.get(),
-                                               &tile_fillable_area);
+        auto generated
+            = lpfill::makeLayerFillCandidates(layer_fill_areas.tile_areas,
+                                              layer,
+                                              config.non_opc,
+                                              graphics_.get(),
+                                              candidate_threads);
+        candidate_generation_seconds = generated.wall_seconds;
+        candidate_generation_work_seconds = generated.work_seconds;
+        actual_candidate_threads = generated.threads;
+        tile_candidates = std::move(generated.tiles);
+        const auto summary_start = Clock::now();
+        for (size_t tile_index = 0; tile_index < grid.tiles().size();
+             ++tile_index) {
+          const Rect& tile = grid.tiles()[tile_index];
+          const auto tile_start = Clock::now();
+          if (lpfill::candidateTraceEnabled()) {
+            lpfill::traceCandidate(
+                std::string("tile summary begin layer=") + layer->getConstName()
+                + " index=" + std::to_string(tile_index)
+                + " total=" + std::to_string(grid.tiles().size())
+                + " bounds_dbu=(" + std::to_string(tile.xMin()) + ","
+                + std::to_string(tile.yMin()) + ")-("
+                + std::to_string(tile.xMax()) + ","
+                + std::to_string(tile.yMax()) + ")");
+          }
+          Polygon90Set tile_fillable_area
+              = std::move(layer_fill_areas.tile_areas[tile_index]);
+          const auto& candidates = tile_candidates[tile_index];
           std::vector<Polygon90> tile_fillable_polygons;
           tile_fillable_area.get(tile_fillable_polygons);
           fillable_polygons.insert(fillable_polygons.end(),
@@ -331,11 +415,45 @@ double LPFill::fillLp(const char* rules_filename,
             capacity += static_cast<double>(xh(candidate) - xl(candidate))
                         * (yh(candidate) - yl(candidate));
           }
-          tile_candidates.push_back(std::move(candidates));
           problem.tile_areas.push_back(tile.area());
           problem.max_fill_areas.push_back(capacity);
+          if (lpfill::candidateTraceEnabled()) {
+            lpfill::traceCandidate(
+                "tile summary end index=" + std::to_string(tile_index)
+                + " candidates=" + std::to_string(candidates.size())
+                + " elapsed_seconds="
+                + std::to_string(seconds(tile_start, Clock::now())));
+          }
         }
         const auto candidates_end = Clock::now();
+        candidate_phases["candidate_summary_seconds"]
+            = seconds(summary_start, candidates_end);
+        candidate_phases["candidate_generation_seconds"]
+            = candidate_generation_seconds;
+        double candidate_accounted = 0.0;
+        for (const auto& [name, value] : candidate_phases) {
+          candidate_accounted += value;
+        }
+        candidate_phases["candidate_other_seconds"] = std::max(
+            0.0,
+            seconds(candidates_start, candidates_end) - candidate_accounted);
+        for (const auto& [name, value] : candidate_phases) {
+          std::cout << "[Fill LP] candidate phase layer="
+                    << layer->getConstName() << " name=" << name
+                    << " seconds=" << value << std::endl;
+        }
+        diagnostic_candidate_seconds
+            = seconds(candidates_start, candidates_end);
+        std::cout << "[Fill LP] candidate generation layer="
+                  << layer->getConstName()
+                  << " tiles=" << tile_candidates.size()
+                  << " candidate_generation_seconds="
+                  << candidate_generation_seconds
+                  << " candidate_generation_work_seconds="
+                  << candidate_generation_work_seconds
+                  << " candidate_threads=" << actual_candidate_threads
+                  << std::endl;
+        lpfill::traceCandidate("candidates end");
 
         size_t omitted_tile_maximums = 0;
         size_t omitted_window_maximums = 0;
@@ -451,7 +569,7 @@ double LPFill::fillLp(const char* rules_filename,
         }
 
         const auto solve_start = Clock::now();
-        const FixedDissectionLpResult result
+        result
             = lip_type == 0
                   ? (minimize_total_fill_area ? solveMinFillAmountLp(problem)
                                               : solveMinVarLP(problem))
@@ -460,6 +578,8 @@ double LPFill::fillLp(const char* rules_filename,
                       makeLipLpNeighborhoods(
                           grid, resolution, static_cast<LipLpType>(lip_type)));
         const auto solve_end = Clock::now();
+        diagnostic_solve_seconds
+            = seconds(solve_start, solve_end) - result.diagnostics_seconds;
         if (lip_type != 0 && result.solved) {
           logger_->info(FIN,
                         65,
@@ -469,15 +589,28 @@ double LPFill::fillLp(const char* rules_filename,
                         result.lip_value,
                         layer->getConstName());
         }
+        std::cout << "[Fill LP] solver statistics layer="
+                  << layer->getConstName()
+                  << " solver=" << fillLpSolverName(problem.lp_solver)
+                  << " iterations=" << result.solver_iterations
+                  << " dual_tolerance=" << problem.dual_tolerance << std::endl;
         if (!result.solved) {
+          std::cout << "[Fill LP] failure solver="
+                    << fillLpSolverName(problem.lp_solver)
+                    << " status=" << result.solver_status
+                    << " status_code=" << result.solver_status_code
+                    << " diagnostics=" << problem.diagnostics_prefix << ".json"
+                    << std::endl;
           logger_->error(FIN,
                          51,
-                         "Fixed-dissection LP fill is infeasible on layer {}: "
+                         "Fixed-dissection LP solve failed on layer {} "
+                         "(solver_status={}, code={}): "
                          "-min_tile_density {:.6f}, -max_tile_density {:.6f}, "
-                         "-min_window_density {:.6f}, and "
-                         "-max_window_density {:.6f} cannot "
-                         "be satisfied simultaneously.",
+                         "-min_window_density {:.6f}, "
+                         "-max_window_density {:.6f}. See failure diagnostics.",
                          layer->getConstName(),
+                         result.solver_status,
+                         result.solver_status_code,
                          min_tile_density,
                          max_tile_density,
                          min_window_density,
@@ -492,22 +625,40 @@ double LPFill::fillLp(const char* rules_filename,
                                           / problem.tile_areas[tile_index]);
         }
 
+        const auto placement_start_time = std::chrono::system_clock::to_time_t(
+            std::chrono::system_clock::now());
+        std::cout << "[Fill LP] placement start layer=" << layer->getConstName()
+                  << " time="
+                  << std::put_time(std::localtime(&placement_start_time),
+                                   "%Y-%m-%d %H:%M:%S %Z")
+                  << " tiles=" << tile_candidates.size() << std::endl;
         const auto placement_start = Clock::now();
-        std::vector<double> placed_areas(grid.tiles().size(), 0.0);
-        std::vector<Rectangle> selected_fills;
-        for (size_t tile_index = 0; tile_index < tile_candidates.size();
-             tile_index++) {
-          const double target_area = result.fill_areas[tile_index];
-          for (const Rectangle& candidate : tile_candidates[tile_index]) {
-            const double candidate_area
-                = static_cast<double>(xh(candidate) - xl(candidate))
-                  * (yh(candidate) - yl(candidate));
-            if (placed_areas[tile_index] + candidate_area <= target_area) {
-              selected_fills.push_back(candidate);
-              placed_areas[tile_index] += candidate_area;
-            }
+        const bool trace_placement = lpfill::candidateTraceEnabled();
+        const auto tracePlacement = [&](const std::string& message) {
+          if (trace_placement) {
+            std::cout << "[Fill placement] layer=" << layer->getConstName()
+                      << " elapsed_seconds="
+                      << seconds(placement_start, Clock::now()) << " "
+                      << message << std::endl;
           }
-        }
+        };
+        tracePlacement("select_candidates begin");
+        auto prepared_placement = lpfill::selectLayerFillCandidates(
+            tile_candidates,
+            result.fill_areas,
+            graphics_ ? 1 : placement_threads);
+        const auto& placed_areas = prepared_placement.placed_areas;
+        const auto& selected_fills = prepared_placement.fills;
+        std::cout << "[Fill LP] placement select layer="
+                  << layer->getConstName()
+                  << " tiles=" << tile_candidates.size()
+                  << " placement_select_seconds="
+                  << prepared_placement.select_seconds
+                  << " placement_select_work_seconds="
+                  << prepared_placement.select_work_seconds
+                  << " placement_threads=" << prepared_placement.threads
+                  << std::endl;
+        tracePlacement("select_candidates end");
 
         // for (size_t tile_index = 0; tile_index < grid.tiles().size();
         //      tile_index++) {
@@ -540,10 +691,30 @@ double LPFill::fillLp(const char* rules_filename,
 
         const int mask_count = std::max(config.num_masks, 1);
         int mask_index = 0;
+        tracePlacement("copy_layer_shapes begin");
+        const auto copy_start = Clock::now();
         Polygon90Set post_fill_shapes = layer_shapes;
-        Polygon90Set selected_fill_shapes;
+        const double placement_copy_seconds = seconds(copy_start, Clock::now());
+        Polygon90Set selected_fill_shapes
+            = std::move(prepared_placement.selected_shapes);
+        const auto union_start = Clock::now();
+        post_fill_shapes += selected_fill_shapes;
+        const double placement_union_seconds
+            = seconds(union_start, Clock::now());
+        tracePlacement("copy_layer_shapes end; insert_fills begin");
+        const auto db_insert_start = Clock::now();
+        size_t fill_index = 0;
         for (const Rectangle& fill : selected_fills) {
+          if (trace_placement) {
+            tracePlacement("fill begin index=" + std::to_string(fill_index)
+                           + " total=" + std::to_string(selected_fills.size())
+                           + " bounds_dbu=(" + std::to_string(xl(fill)) + ","
+                           + std::to_string(yl(fill)) + ")-("
+                           + std::to_string(xh(fill)) + ","
+                           + std::to_string(yh(fill)) + ")");
+          }
           const int mask = mask_count == 1 ? 0 : mask_index++ % mask_count + 1;
+          tracePlacement("dbFill.create begin");
           created_fills.push_back(dbFill::create(block,
                                                  false,
                                                  mask,
@@ -552,26 +723,81 @@ double LPFill::fillLp(const char* rules_filename,
                                                  yl(fill),
                                                  xh(fill),
                                                  yh(fill)));
-          const Polygon90 fill_shape
-              = makeRect(xl(fill), yl(fill), xh(fill), yh(fill));
-          post_fill_shapes += fill_shape;
-          selected_fill_shapes += fill_shape;
+          tracePlacement("dbFill.create end; fill end");
+          ++fill_index;
         }
+        const double db_insert_seconds = seconds(db_insert_start, Clock::now());
+        tracePlacement("insert_fills end; calculate_metal_densities begin");
 
-        grid.calculateMetalDensities(post_fill_shapes);
+        std::map<std::string, double> density_phases;
+        const auto post_fill_density_start = Clock::now();
+        grid.calculateMetalDensities(post_fill_shapes, &density_phases);
+        const double post_fill_density_seconds
+            = seconds(post_fill_density_start, Clock::now());
+        tracePlacement("calculate_metal_densities end");
         const auto placement_end = Clock::now();
+        auto phase_seconds = std::move(prepared_placement.phase_seconds);
+        phase_seconds["placement_copy_seconds"] = placement_copy_seconds;
+        phase_seconds["placement_union_seconds"] = placement_union_seconds;
+        phase_seconds["db_insert_seconds"] = db_insert_seconds;
+        double density_accounted = 0.0;
+        for (const auto& [name, value] : density_phases) {
+          density_accounted += value;
+          phase_seconds[name] = value;
+        }
+        phase_seconds["post_fill_density_other_seconds"]
+            = std::max(0.0, post_fill_density_seconds - density_accounted);
+        phase_seconds["placement_other_seconds"]
+            = std::max(0.0,
+                       seconds(placement_start, placement_end)
+                           - prepared_placement.wall_seconds
+                           - placement_copy_seconds - placement_union_seconds
+                           - db_insert_seconds - post_fill_density_seconds);
+        std::cout << "[Fill LP] placement breakdown layer="
+                  << layer->getConstName() << " placement_prepare_seconds="
+                  << prepared_placement.wall_seconds
+                  << " placement_prepare_work_seconds="
+                  << prepared_placement.work_seconds
+                  << " db_insert_seconds=" << db_insert_seconds
+                  << " post_fill_density_seconds=" << post_fill_density_seconds
+                  << " placement_threads=" << prepared_placement.threads
+                  << std::endl;
+        const auto placement_end_time = std::chrono::system_clock::to_time_t(
+            std::chrono::system_clock::now());
+        std::cout << "[Fill LP] placement end layer=" << layer->getConstName()
+                  << " time="
+                  << std::put_time(std::localtime(&placement_end_time),
+                                   "%Y-%m-%d %H:%M:%S %Z")
+                  << " placement_seconds="
+                  << seconds(placement_start, placement_end)
+                  << " fill_rectangles=" << selected_fills.size() << std::endl;
+        for (const auto& [name, value] : phase_seconds) {
+          std::cout << "[Fill LP] placement phase layer="
+                    << layer->getConstName() << " name=" << name
+                    << " seconds=" << value << std::endl;
+        }
         const auto [min_post_fill_density, max_post_fill_density]
             = getWindowDensityRange(grid.windows());
         const double planned_area = std::accumulate(
             result.fill_areas.begin(), result.fill_areas.end(), 0.0);
         const double placed_area
             = std::accumulate(placed_areas.begin(), placed_areas.end(), 0.0);
+        double min_post_fill_tile_density = 1.0;
+        double max_post_fill_tile_density = 0.0;
+        size_t min_violation_tile_count = 0;
+        size_t max_violation_tile_count = 0;
         for (size_t tile_index = 0; tile_index < grid.tiles().size();
              tile_index++) {
           const double tile_area = problem.tile_areas[tile_index];
           const double target_density = target_tile_densities[tile_index];
           const double actual_density
               = grid.metalAreas()[tile_index] / tile_area;
+          min_post_fill_tile_density
+              = std::min(min_post_fill_tile_density, actual_density);
+          max_post_fill_tile_density
+              = std::max(max_post_fill_tile_density, actual_density);
+          min_violation_tile_count += actual_density < min_tile_density;
+          max_violation_tile_count += actual_density > max_tile_density;
           const double shortage
               = std::max(target_density - actual_density, 0.0);
           logger_->info(FIN,
@@ -660,7 +886,42 @@ double LPFill::fillLp(const char* rules_filename,
                                    solve_seconds,
                                    placement_seconds,
                                    layer_compute_seconds,
-                                   0.0});
+                                   0.0,
+                                   result.solver_status,
+                                   result.solver_status_code,
+                                   ""});
+        density_reports.back().candidate_generation_seconds
+            = candidate_generation_seconds;
+        density_reports.back().candidate_generation_work_seconds
+            = candidate_generation_work_seconds;
+        density_reports.back().lp_solver = fillLpSolverName(problem.lp_solver);
+        density_reports.back().solver_iterations = result.solver_iterations;
+        density_reports.back().candidate_threads = actual_candidate_threads;
+        density_reports.back().candidate_prepare_threads
+            = layer_fill_areas.threads;
+        density_reports.back().candidate_phase_seconds = candidate_phases;
+        density_reports.back().placement_prepare_seconds
+            = prepared_placement.wall_seconds;
+        density_reports.back().placement_prepare_work_seconds
+            = prepared_placement.work_seconds;
+        density_reports.back().db_insert_seconds = db_insert_seconds;
+        density_reports.back().post_fill_density_seconds
+            = post_fill_density_seconds;
+        density_reports.back().placement_threads = prepared_placement.threads;
+        density_reports.back().placement_select_seconds
+            = prepared_placement.select_seconds;
+        density_reports.back().placement_select_work_seconds
+            = prepared_placement.select_work_seconds;
+        density_reports.back().placement_phase_seconds
+            = std::move(phase_seconds);
+        density_reports.back().min_post_fill_tile_density
+            = min_post_fill_tile_density;
+        density_reports.back().max_post_fill_tile_density
+            = max_post_fill_tile_density;
+        density_reports.back().min_violation_tile_count
+            = min_violation_tile_count;
+        density_reports.back().max_violation_tile_count
+            = max_violation_tile_count;
         if (svg_filename != nullptr && svg_filename[0] != '\0') {
           compute_seconds += seconds(compute_slice_start, Clock::now());
           const auto svg_start = Clock::now();
@@ -709,36 +970,69 @@ double LPFill::fillLp(const char* rules_filename,
           dbFill::destroy(created_fills[index]);
         }
         created_fills.resize(layer_fill_start);
+        const auto diagnostics_start = Clock::now();
+        writeFillLpFailureDiagnostics(problem,
+                                      grid,
+                                      layer->getConstName(),
+                                      result,
+                                      min_window_density,
+                                      infeasibility_reason);
+        const double diagnostics_seconds
+            = result.diagnostics_seconds
+              + seconds(diagnostics_start, Clock::now());
+        std::cout << "[Fill LP] failure runtime layer=" << layer->getConstName()
+                  << " candidates=" << diagnostic_candidate_seconds
+                  << " lp_model_and_solve=" << diagnostic_solve_seconds
+                  << " diagnostics=" << diagnostics_seconds
+                  << " placement=not_started" << std::endl;
+        std::cout << "[Fill LP] failure diagnostics written: "
+                  << problem.diagnostics_prefix << ".json" << std::endl;
         const WindowDensitySummary density_summary = summarizeWindowDensities(
             grid.windows(), min_window_density, max_window_density);
-        density_reports.push_back({layer->getConstName(),
-                                   0.0,
-                                   0.0,
-                                   grid.windows().size(),
-                                   density_summary.min_density,
-                                   density_summary.max_density,
-                                   density_summary.mean_density,
-                                   density_summary.variance,
-                                   density_summary.min_violation_count,
-                                   density_summary.max_violation_count,
-                                   makeWindowDensityHistogram(grid.windows()),
-                                   false,
-                                   infeasibility_reason.empty()
-                                       ? "lp_infeasible"
-                                       : infeasibility_reason,
-                                   diagnostic_window_index,
-                                   diagnostic_window_bounds,
-                                   diagnostic_current_density,
-                                   diagnostic_required_fill_area,
-                                   diagnostic_max_legal_fill_area,
-                                   diagnostic_fill_budget,
-                                   tile_violations.size(),
-                                   window_violations.size(),
-                                   0.0,
-                                   0.0,
-                                   0.0,
-                                   seconds(layer_start, Clock::now()),
-                                   0.0});
+        density_reports.push_back(
+            {layer->getConstName(),
+             0.0,
+             0.0,
+             grid.windows().size(),
+             density_summary.min_density,
+             density_summary.max_density,
+             density_summary.mean_density,
+             density_summary.variance,
+             density_summary.min_violation_count,
+             density_summary.max_violation_count,
+             makeWindowDensityHistogram(grid.windows()),
+             false,
+             infeasibility_reason.empty()
+                 ? (result.solver_status_code == 2 ? "lp_infeasible"
+                                                   : "lp_solver_failure")
+                 : infeasibility_reason,
+             diagnostic_window_index,
+             diagnostic_window_bounds,
+             diagnostic_current_density,
+             diagnostic_required_fill_area,
+             diagnostic_max_legal_fill_area,
+             diagnostic_fill_budget,
+             tile_violations.size(),
+             window_violations.size(),
+             diagnostic_candidate_seconds,
+             diagnostic_solve_seconds,
+             0.0,
+             seconds(layer_start, Clock::now()),
+             0.0,
+             result.solver_status,
+             result.solver_status_code,
+             problem.diagnostics_prefix,
+             diagnostics_seconds});
+        density_reports.back().candidate_generation_seconds
+            = candidate_generation_seconds;
+        density_reports.back().candidate_generation_work_seconds
+            = candidate_generation_work_seconds;
+        density_reports.back().lp_solver = fillLpSolverName(problem.lp_solver);
+        density_reports.back().solver_iterations = result.solver_iterations;
+        density_reports.back().candidate_threads = actual_candidate_threads;
+        density_reports.back().candidate_prepare_threads
+            = layer_fill_areas.threads;
+        density_reports.back().candidate_phase_seconds = candidate_phases;
         if (svg_filename != nullptr && svg_filename[0] != '\0') {
           compute_seconds += seconds(compute_slice_start, Clock::now());
           const auto svg_start = Clock::now();

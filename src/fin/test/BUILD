@@ -89,6 +89,8 @@ cc_test(
     includes = ["../src"],
     deps = [
         "//src/fin:fin",
+        "@boost.property_tree",
+        "@or-tools//ortools/math_opt/io:lp_parser",
         "@googletest//:gtest",
         "@googletest//:gtest_main",
     ],
@@ -101,6 +103,7 @@ cc_test(
     includes = ["../src"],
     deps = [
         "//src/fin:fin",
+        "//src/gui:gui_stub",
         "@boost.polygon",
         "@googletest//:gtest",
         "@googletest//:gtest_main",

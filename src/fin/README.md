@@ -68,8 +68,71 @@ fixed_dissection_lp_min_var_fill
     [-max_tile_density density]
     [-min_window_density density]
     [-max_window_density density]
+    [-lp_solver glop|pdlp]
+    [-lp_threads threads]
+    [-candidate_threads threads]
+    [-placement_threads threads]
+    [-lp_diagnostics prefix]
     [-svg file]
 ```
+
+`-lp_solver` selects the OR-Tools backend for all three LP commands: `glop`
+(default) or `pdlp`. The LP formulation and area units are unchanged; the
+selected backend uses its default solver parameters except for the thread count.
+`-lp_threads` sets the PDLP thread count and defaults to `1`, independently of
+OpenROAD/OpenMP threads. Values greater than one require `-lp_solver pdlp`.
+The solver must be included in the OR-Tools build. Solve logs report the selected backend.
+
+`-candidate_threads` controls independent per-tile boundary spacing, pruning,
+and candidate generation for all
+LP methods and both solvers (default `1`). It is separate from `-lp_threads`.
+Results remain ordered by tile, and LP solving and placement run after generation
+finishes. Debug graphics or detailed candidate tracing force serial generation.
+The log reports the actual candidate thread count. `candidate_generation_seconds`
+is elapsed time for generation, including thread scheduling;
+`candidate_generation_work_seconds` sums individual tile-call durations and can
+exceed elapsed time when calls overlap.
+
+`-placement_threads` controls per-tile candidate selection and geometry preparation
+(default `1`), independently of candidate generation and LP solving. Selected
+fills are merged in the original tile/candidate order, preserving mask assignment.
+The separate `placement_select_seconds` elapsed timer covers only choosing
+candidates against the LP tile targets; geometry construction and ordered merging
+are excluded. `placement_select_work_seconds` sums tile selection call durations.
+OpenDB insertion and the final density calculation stay serial. Debug graphics
+or detailed tracing force serial placement preparation. Logs and density reports
+split placement into preparation, DB insertion, and post-fill density time;
+preparation includes the ordered merge and its work-time sum excludes that merge.
+
+Placement additionally profiles allocation, selection, shape construction, rectangle
+collection, polygon merging, temporary-buffer cleanup, layer copy/append, DB
+insertion, and the individual post-fill density steps. Per-layer logs contain
+`placement phase` lines; LP report JSON stores the disjoint elapsed phases in
+`runtime_seconds.placement_phases`. Parent totals and worker-duration sums overlap
+these phases and should not be added to them.
+
+Min Amount and Min Var internally divide all LP areas by the largest tile area
+(or one if all tile areas are zero), for both backends. This keeps typical fill
+variables near one while preserving relative tile sizes and the objective.
+Returned areas and placement still use DBU². Solve logs include `area_scale`;
+failure JSON includes `model_area_scale`, the multiplier converting exported LP
+area variables and row bounds back to DBU². Tile/window diagnostic CSVs already
+use DBU². The Lip formulation retains its existing units.
+
+On a failed layer, FIN automatically writes `<prefix>_<layer>.json`,
+`.tiles.csv`, `.windows.csv`, and `.bound_updates.csv`. Set the prefix with
+`-lp_diagnostics`; the default is `fin_lp_failure` in the working directory.
+Failures returned by a solver also write the named model (`.lp`) and row bounds
+(`.constraints.csv`). Files are written only on failure, not on a successful
+solve. Killed or timed-out processes cannot produce these post-failure files.
+
+The JSON records solver status, requested and effective density bounds (including
+the Min Amount placement guard), units, and diagnostic paths. CSVs map `p_N`,
+`lower_N`, and `upper_N` to tile/window coordinates, capacities, and applied bounds.
+Bound propagation records ordered implied-bound updates and the first detected
+tile or window conflict. It is not a general IIS computation; if it cannot identify a
+conflict, `conflict` is `null`. Lip neighborhood rows are named by group/window
+and remain in the LP export. Unknown locations in density reports are `null`.
 
 `-min_tile_density` is a post-fill density lower bound for each tile whose
 legal fill capacity can reach it. If the existing metal plus all legal fill
@@ -112,6 +175,11 @@ fixed_dissection_lp_min_amount_fill
     [-max_tile_density density]
     [-min_window_density density]
     [-max_window_density density]
+    [-lp_solver glop|pdlp]
+    [-lp_threads threads]
+    [-candidate_threads threads]
+    [-placement_threads threads]
+    [-lp_diagnostics prefix]
     [-svg file]
     [-density_report file]
 ```
@@ -137,6 +205,11 @@ fixed_dissection_lp_lip_fill
     [-max_tile_density density]
     [-min_window_density density]
     [-max_window_density density]
+    [-lp_solver glop|pdlp]
+    [-lp_threads threads]
+    [-candidate_threads threads]
+    [-placement_threads threads]
+    [-lp_diagnostics prefix]
     [-svg file]
     [-density_report file]
 ```

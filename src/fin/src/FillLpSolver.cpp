@@ -4,10 +4,17 @@
 #include "FillLpSolver.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <ctime>
+#include <iomanip>
+#include <iostream>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
+#include "LpDiagnostics.h"
 #include "ortools/linear_solver/linear_solver.h"
 
 namespace fin {
@@ -64,6 +71,34 @@ void validateProblem(const FixedDissectionLpProblem& problem)
 
 }  // namespace
 
+void configureFillLpDualTolerance(const FixedDissectionLpProblem& problem,
+                                  operations_research::MPSolver& solver)
+{
+  if (!std::isfinite(problem.dual_tolerance) || problem.dual_tolerance < 0.0) {
+    throw std::invalid_argument(
+        "Dual tolerance must be finite and nonnegative.");
+  }
+  if (problem.dual_tolerance == 0.0) {
+    return;
+  }
+  if (problem.lp_solver != FillLpSolver::Pdlp) {
+    throw std::invalid_argument("Dual tolerance override requires PDLP.");
+  }
+  std::ostringstream parameters;
+  parameters << std::scientific << std::setprecision(17)
+             << "termination_criteria { detailed_optimality_criteria { "
+             << "eps_optimal_primal_residual_absolute: 1e-6 "
+             << "eps_optimal_primal_residual_relative: 1e-6 "
+             << "eps_optimal_dual_residual_absolute: " << problem.dual_tolerance
+             << " eps_optimal_dual_residual_relative: "
+             << problem.dual_tolerance
+             << " eps_optimal_objective_gap_absolute: 1e-6 "
+             << "eps_optimal_objective_gap_relative: 1e-6 } }";
+  if (!solver.SetSolverSpecificParametersAsString(parameters.str())) {
+    throw std::runtime_error("Failed to configure PDLP dual tolerance.");
+  }
+}
+
 FixedDissectionLpResult solveFillLp(const FixedDissectionLpProblem& problem,
                                     const FillLpObjective objective_type)
 {
@@ -73,11 +108,39 @@ FixedDissectionLpResult solveFillLp(const FixedDissectionLpProblem& problem,
   using operations_research::MPSolver;
   using operations_research::MPVariable;
 
-  std::unique_ptr<MPSolver> solver(MPSolver::CreateSolver("GLOP"));
+  if (problem.lp_threads < 1) {
+    throw std::invalid_argument("LP thread count must be positive.");
+  }
+  if (problem.lp_solver != FillLpSolver::Pdlp && problem.lp_threads != 1) {
+    throw std::invalid_argument("Multiple LP threads require the PDLP solver.");
+  }
+  const char* solver_name = fillLpSolverName(problem.lp_solver);
+  std::unique_ptr<MPSolver> solver(MPSolver::CreateSolver(solver_name));
   if (solver == nullptr) {
-    return {};
+    throw std::runtime_error(std::string("LP solver is unavailable: ")
+                             + solver_name);
   }
 
+  configureFillLpDualTolerance(problem, *solver);
+
+  if (problem.solver_log) {
+    solver->EnableOutput();
+  }
+
+  if (problem.lp_solver == FillLpSolver::Pdlp) {
+    const auto thread_status = solver->SetNumThreads(problem.lp_threads);
+    if (!thread_status.ok()) {
+      throw std::runtime_error("Failed to configure PDLP threads: "
+                               + thread_status.ToString());
+    }
+  }
+
+  // Use one common area unit so clipped edge tiles keep their relative sizes
+  // and all constraint coefficients remain unchanged. A full tile then has
+  // area one, regardless of the design's DBU scale.
+  const double largest_tile_area
+      = *std::max_element(problem.tile_areas.begin(), problem.tile_areas.end());
+  const double area_scale = largest_tile_area > 0.0 ? largest_tile_area : 1.0;
   const double infinity = solver->infinity();
   std::vector<MPVariable*> fill_variables;
   fill_variables.reserve(problem.tile_areas.size());
@@ -87,8 +150,9 @@ FixedDissectionLpResult solveFillLp(const FixedDissectionLpProblem& problem,
     if (min_fill_area > max_fill_area) {
       return {};
     }
-    fill_variables.push_back(solver->MakeNumVar(
-        min_fill_area, max_fill_area, "p_" + std::to_string(index)));
+    fill_variables.push_back(solver->MakeNumVar(min_fill_area / area_scale,
+                                                max_fill_area / area_scale,
+                                                "p_" + std::to_string(index)));
   }
 
   MPVariable* min_window_area = nullptr;
@@ -106,15 +170,18 @@ FixedDissectionLpResult solveFillLp(const FixedDissectionLpProblem& problem,
     const double fill_budget
         = problem.maximumWindowFillArea(window_area, feature_area);
     MPConstraint* upper_bound = solver->MakeRowConstraint(
-        -infinity, fill_budget, "upper_" + std::to_string(index));
+        -infinity, fill_budget / area_scale, "upper_" + std::to_string(index));
     const double minimum_fill_area = std::max(
         problem.min_window_density * window_area - feature_area, 0.0);
-    MPConstraint* lower_bound = solver->MakeRowConstraint(
-        minimum_fill_area, infinity, "lower_" + std::to_string(index));
+    MPConstraint* lower_bound
+        = solver->MakeRowConstraint(minimum_fill_area / area_scale,
+                                    infinity,
+                                    "lower_" + std::to_string(index));
     MPConstraint* min_bound = nullptr;
     if (min_window_area != nullptr) {
-      min_bound = solver->MakeRowConstraint(
-          -infinity, feature_area, "minimum_" + std::to_string(index));
+      min_bound = solver->MakeRowConstraint(-infinity,
+                                            feature_area / area_scale,
+                                            "minimum_" + std::to_string(index));
       min_bound->SetCoefficient(min_window_area, 1.0);
     }
     for (const size_t tile_index : window) {
@@ -136,16 +203,54 @@ FixedDissectionLpResult solveFillLp(const FixedDissectionLpProblem& problem,
     }
     objective->SetMinimization();
   }
+  const char* method
+      = objective_type == FillLpObjective::MaximizeMinimumWindowArea
+            ? "lp_minvar"
+            : "min_amount";
+  const auto start_time
+      = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::cout << "[Fill LP] " << solver_name << " solve start method=" << method
+            << " time="
+            << std::put_time(std::localtime(&start_time),
+                             "%Y-%m-%d %H:%M:%S %Z")
+            << " solver_log=" << problem.solver_log
+            << " lp_threads=" << problem.lp_threads
+            << " area_scale=" << area_scale
+            << " variables=" << solver->NumVariables()
+            << " constraints=" << solver->NumConstraints() << std::endl;
+  const auto solve_start = std::chrono::steady_clock::now();
   const MPSolver::ResultStatus status = solver->Solve();
+  const double solve_seconds
+      = std::chrono::duration<double>(std::chrono::steady_clock::now()
+                                      - solve_start)
+            .count();
+  const int64_t solver_iterations
+      = status == MPSolver::OPTIMAL || status == MPSolver::FEASIBLE
+            ? solver->iterations()
+            : -1;
+  const auto end_time
+      = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::cout << "[Fill LP] " << solver_name << " solve end method=" << method
+            << " time="
+            << std::put_time(std::localtime(&end_time), "%Y-%m-%d %H:%M:%S %Z")
+            << " solve_seconds=" << solve_seconds
+            << " status=" << static_cast<int>(status)
+            << " iterations=" << solver_iterations << std::endl;
   if (status != MPSolver::OPTIMAL && status != MPSolver::FEASIBLE) {
-    return {};
+    return recordFillLpFailure(
+        problem, *solver, status, solve_seconds, area_scale);
   }
 
   FixedDissectionLpResult result;
   result.solved = true;
+  result.solver_status = fillLpStatusName(status);
+  result.solver_status_code = status;
+  result.solver_iterations = solver_iterations;
+  result.solve_seconds = solve_seconds;
+  result.model_area_scale = area_scale;
   result.fill_areas.reserve(fill_variables.size());
   for (const MPVariable* fill : fill_variables) {
-    result.fill_areas.push_back(fill->solution_value());
+    result.fill_areas.push_back(fill->solution_value() * area_scale);
   }
   result.min_window_area = infinity;
   for (const auto& window : problem.windows) {

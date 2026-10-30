@@ -15,8 +15,14 @@ fin::Finale* getFinale()
 %}
 
 %include "../../Exception.i"
+%include "std_string.i"
 
 %inline %{
+
+  std::string layout_feature_counts_cmd()
+  {
+    return getFinale()->layoutFeatureCounts();
+  }
 
   void density_fill_cmd(const char* rules_filename, const odb::Rect& fill_area)
   {
@@ -58,7 +64,10 @@ fin::Finale* getFinale()
                                       double min_window_density,
                                       double max_window_density,
                                       const char* svg_filename,
-                                      const char* density_report_filename)
+                                      const char* density_report_filename,
+                                      const char* lp_solver = "glop",
+                                      int lp_threads = 1,
+                                      const char* lp_diagnostics = "", int candidate_threads = 1, int placement_threads = 1)
   {
     return getFinale()->fixedDissectionLpMinVarFill(rules_filename,
                                          region,
@@ -70,7 +79,10 @@ fin::Finale* getFinale()
                                          min_window_density,
                                          max_window_density,
                                          svg_filename,
-                                         density_report_filename);
+                                         density_report_filename,
+                                         lp_solver,
+                                         lp_threads,
+                                         lp_diagnostics, candidate_threads, placement_threads);
   }
 
   double fixed_dissection_lp_min_amount_fill_cmd(
@@ -84,7 +96,10 @@ fin::Finale* getFinale()
       double min_window_density,
       double max_window_density,
       const char* svg_filename,
-      const char* density_report_filename)
+      const char* density_report_filename,
+      const char* lp_solver = "glop",
+      int lp_threads = 1,
+      const char* lp_diagnostics = "", int candidate_threads = 1, int placement_threads = 1)
   {
     return getFinale()->fixedDissectionLpMinAmountFill(rules_filename,
                                                   region,
@@ -96,7 +111,10 @@ fin::Finale* getFinale()
                                                   min_window_density,
                                                   max_window_density,
                                                   svg_filename,
-                                                  density_report_filename);
+                                                  density_report_filename,
+                                                  lp_solver,
+                                                  lp_threads,
+                                                  lp_diagnostics, candidate_threads, placement_threads);
   }
 
   double fixed_dissection_lp_lip_fill_cmd(const char* rules_filename,
@@ -110,7 +128,10 @@ fin::Finale* getFinale()
                                           double max_window_density,
                                           int lip_type,
                                           const char* svg_filename,
-                                          const char* density_report_filename)
+                                          const char* density_report_filename,
+                                          const char* lp_solver = "glop",
+                                          int lp_threads = 1,
+                                          const char* lp_diagnostics = "", int candidate_threads = 1, int placement_threads = 1)
   {
     return getFinale()->fixedDissectionLpLipFill(rules_filename,
                                             region,
@@ -123,7 +144,10 @@ fin::Finale* getFinale()
                                             max_window_density,
                                             lip_type,
                                             svg_filename,
-                                            density_report_filename);
+                                            density_report_filename,
+                                            lp_solver,
+                                            lp_threads,
+                                            lp_diagnostics, candidate_threads, placement_threads);
   }
 
 %} // inline

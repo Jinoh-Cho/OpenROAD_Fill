@@ -23,6 +23,8 @@ cc_library(
         "src/FillGeometry.h",
         "src/FillLpSolver.cpp",
         "src/FillLpSolver.h",
+        "src/LpDiagnostics.cpp",
+        "src/LpDiagnostics.h",
         "src/FixedDissectionLp.h",
         "src/LipLpFill.cpp",
         "src/LipLpFill.h",
@@ -59,6 +61,7 @@ cc_library(
     includes = [
         "include",
     ],
+    copts = ["-fopenmp"],
     deps = [
         "//:ord",
         "//src/gui",
@@ -70,6 +73,7 @@ cc_library(
         "@boost.stacktrace",
         "@or-tools//ortools/linear_solver",
         "@or-tools//ortools/linear_solver:linear_solver_base",
+        "@openmp",
         "@tcl_lang//:tcl",
     ],
 )

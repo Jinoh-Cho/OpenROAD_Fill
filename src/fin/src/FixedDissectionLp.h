@@ -5,10 +5,30 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace fin {
+
+enum class FillLpSolver
+{
+  Glop,
+  Pdlp
+};
+
+inline const char* fillLpSolverName(FillLpSolver solver)
+{
+  switch (solver) {
+    case FillLpSolver::Glop:
+      return "GLOP";
+    case FillLpSolver::Pdlp:
+      return "PDLP";
+  }
+  throw std::invalid_argument("Unknown LP solver.");
+}
 
 // J40 fixed-dissection LP input.  All areas use the same unit (normally
 // DBU^2).  A window contains indices into the three per-tile vectors.
@@ -22,6 +42,15 @@ struct FixedDissectionLpProblem
   std::vector<double> feature_areas;
   std::vector<double> max_fill_areas;
   std::vector<std::vector<size_t>> windows;
+
+  FillLpSolver lp_solver = FillLpSolver::Glop;
+  int lp_threads = 1;
+  std::string diagnostics_prefix = "";
+  // Enable backend convergence logging without changing solver tolerances.
+  bool solver_log = false;
+  // Zero preserves backend defaults; a positive value overrides PDLP dual
+  // absolute/relative tolerances, keeping primal and gap at 1e-6.
+  double dual_tolerance = 0.0;
 
   // Omit an unattainable tile minimum while retaining its capacity and
   // contribution to every window density constraint.
@@ -53,6 +82,16 @@ struct FixedDissectionLpResult
   double min_window_area = 0.0;
   double lip_value = 0.0;
   std::vector<double> fill_areas;
+  std::string solver_status = "NOT_RUN";
+  int solver_status_code = -1;
+  // Backend iteration count; -1 means unavailable or solve not completed.
+  int64_t solver_iterations = -1;
+  double solve_seconds = 0.0;
+  // Multiply exported LP area variables and row bounds by this value to
+  // recover input area units. Public result areas already use input units.
+  double model_area_scale = 1.0;
+  bool model_exported = false;
+  double diagnostics_seconds = 0.0;
 };
 
 }  // namespace fin

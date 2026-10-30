@@ -17,6 +17,8 @@ add_executable(FixedDissectionLpTest FixedDissectionLpTest.cpp)
 target_include_directories(FixedDissectionLpTest PRIVATE ../../src)
 target_link_libraries(FixedDissectionLpTest
   fin
+  ortools::ortools
+  Boost::boost
   GTest::gtest
   GTest::gtest_main
 )

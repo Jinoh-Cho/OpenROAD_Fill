@@ -4,10 +4,16 @@
 #include "LipLpFill.h"
 
 #include <algorithm>
+#include <chrono>
+#include <ctime>
+#include <iomanip>
+#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
 
+#include "FillLpSolver.h"
+#include "LpDiagnostics.h"
 #include "ortools/linear_solver/linear_solver.h"
 
 namespace fin {
@@ -134,9 +140,31 @@ FixedDissectionLpResult solveLipLpFill(
   using operations_research::MPConstraint;
   using operations_research::MPSolver;
   using operations_research::MPVariable;
-  std::unique_ptr<MPSolver> solver(MPSolver::CreateSolver("GLOP"));
+  if (problem.lp_threads < 1) {
+    throw std::invalid_argument("LP thread count must be positive.");
+  }
+  if (problem.lp_solver != FillLpSolver::Pdlp && problem.lp_threads != 1) {
+    throw std::invalid_argument("Multiple LP threads require the PDLP solver.");
+  }
+  const char* solver_name = fillLpSolverName(problem.lp_solver);
+  std::unique_ptr<MPSolver> solver(MPSolver::CreateSolver(solver_name));
   if (solver == nullptr) {
-    return {};
+    throw std::runtime_error(std::string("LP solver is unavailable: ")
+                             + solver_name);
+  }
+
+  configureFillLpDualTolerance(problem, *solver);
+
+  if (problem.solver_log) {
+    solver->EnableOutput();
+  }
+
+  if (problem.lp_solver == FillLpSolver::Pdlp) {
+    const auto thread_status = solver->SetNumThreads(problem.lp_threads);
+    if (!thread_status.ok()) {
+      throw std::runtime_error("Failed to configure PDLP threads: "
+                               + thread_status.ToString());
+    }
   }
 
   const double infinity = solver->infinity();
@@ -169,8 +197,10 @@ FixedDissectionLpResult solveLipLpFill(
                    0.0);
     const double max_fill = problem.maximumWindowFillArea(
         window_areas[index], window_feature_areas[index]);
-    MPConstraint* lower = solver->MakeRowConstraint(min_fill, infinity);
-    MPConstraint* upper = solver->MakeRowConstraint(-infinity, max_fill);
+    MPConstraint* lower = solver->MakeRowConstraint(
+        min_fill, infinity, "lower_" + std::to_string(index));
+    MPConstraint* upper = solver->MakeRowConstraint(
+        -infinity, max_fill, "upper_" + std::to_string(index));
     for (const size_t tile_index : problem.windows[index]) {
       lower->SetCoefficient(fill_variables[tile_index], 1.0);
       upper->SetCoefficient(fill_variables[tile_index], 1.0);
@@ -184,16 +214,23 @@ FixedDissectionLpResult solveLipLpFill(
         0.0, 1.0, "min_density_" + std::to_string(group_index));
     MPVariable* max_density = solver->MakeNumVar(
         0.0, 1.0, "max_density_" + std::to_string(group_index));
-    MPConstraint* range = solver->MakeRowConstraint(0.0, infinity);
+    MPConstraint* range = solver->MakeRowConstraint(
+        0.0, infinity, "range_" + std::to_string(group_index));
     range->SetCoefficient(lip, 1.0);
     range->SetCoefficient(max_density, -1.0);
     range->SetCoefficient(min_density, 1.0);
     for (const size_t window_index : neighborhoods[group_index]) {
       MPConstraint* maximum = solver->MakeRowConstraint(
-          -infinity, -window_feature_areas[window_index]);
+          -infinity,
+          -window_feature_areas[window_index],
+          "lip_max_g" + std::to_string(group_index) + "_w"
+              + std::to_string(window_index));
       maximum->SetCoefficient(max_density, -window_areas[window_index]);
       MPConstraint* minimum = solver->MakeRowConstraint(
-          -window_feature_areas[window_index], infinity);
+          -window_feature_areas[window_index],
+          infinity,
+          "lip_min_g" + std::to_string(group_index) + "_w"
+              + std::to_string(window_index));
       minimum->SetCoefficient(min_density, -window_areas[window_index]);
       for (const size_t tile_index : problem.windows[window_index]) {
         maximum->SetCoefficient(fill_variables[tile_index], 1.0);
@@ -204,13 +241,42 @@ FixedDissectionLpResult solveLipLpFill(
 
   solver->MutableObjective()->SetCoefficient(lip, 1.0);
   solver->MutableObjective()->SetMinimization();
+  const auto start_time
+      = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::cout << "[Fill LP] " << solver_name << " solve start method=lip time="
+            << std::put_time(std::localtime(&start_time),
+                             "%Y-%m-%d %H:%M:%S %Z")
+            << " solver_log=" << problem.solver_log
+            << " lp_threads=" << problem.lp_threads
+            << " variables=" << solver->NumVariables()
+            << " constraints=" << solver->NumConstraints() << std::endl;
+  const auto solve_start = std::chrono::steady_clock::now();
   const MPSolver::ResultStatus status = solver->Solve();
+  const double solve_seconds
+      = std::chrono::duration<double>(std::chrono::steady_clock::now()
+                                      - solve_start)
+            .count();
+  const int64_t solver_iterations
+      = status == MPSolver::OPTIMAL || status == MPSolver::FEASIBLE
+            ? solver->iterations()
+            : -1;
+  const auto end_time
+      = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::cout << "[Fill LP] " << solver_name << " solve end method=lip time="
+            << std::put_time(std::localtime(&end_time), "%Y-%m-%d %H:%M:%S %Z")
+            << " solve_seconds=" << solve_seconds
+            << " status=" << static_cast<int>(status)
+            << " iterations=" << solver_iterations << std::endl;
   if (status != MPSolver::OPTIMAL && status != MPSolver::FEASIBLE) {
-    return {};
+    return recordFillLpFailure(problem, *solver, status, solve_seconds);
   }
 
   FixedDissectionLpResult result;
   result.solved = true;
+  result.solver_status = fillLpStatusName(status);
+  result.solver_status_code = status;
+  result.solver_iterations = solver_iterations;
+  result.solve_seconds = solve_seconds;
   result.lip_value = lip->solution_value();
   result.fill_areas.reserve(fill_variables.size());
   for (const MPVariable* fill : fill_variables) {

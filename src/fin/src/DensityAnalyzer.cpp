@@ -4,6 +4,7 @@
 #include "DensityAnalyzer.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <numeric>
@@ -340,25 +341,92 @@ FloatingDensityResult analyzeFloatingDensityAlg3(
 }
 
 void TileGrid::calculateMetalDensities(
-    const boost::polygon::polygon_90_set_data<int>& metal_shapes)
+    const boost::polygon::polygon_90_set_data<int>& metal_shapes,
+    std::map<std::string, double>* phase_seconds)
 {
+  using Clock = std::chrono::steady_clock;
+  auto phase_start = phase_seconds ? Clock::now() : Clock::time_point{};
+  const auto finish_phase = [&](const char* name) {
+    if (phase_seconds != nullptr) {
+      const auto end = Clock::now();
+      (*phase_seconds)[name]
+          = std::chrono::duration<double>(end - phase_start).count();
+      phase_start = end;
+    }
+  };
   metal_densities_.clear();
   metal_densities_.reserve(tiles_.size());
   metal_areas_.clear();
   metal_areas_.reserve(tiles_.size());
 
-  for (const odb::Rect& tile : tiles_) {
-    Polygon90Set tile_polygon;
-    tile_polygon.insert(makeRectangle(tile));
-    Polygon90Set covered_area = metal_shapes & tile_polygon;
+  finish_phase("post_fill_density_setup_seconds");
+  if (tiles_.empty()) {
+    if (phase_seconds != nullptr) {
+      (*phase_seconds)["post_fill_union_clip_seconds"] = 0.0;
+      (*phase_seconds)["post_fill_decompose_seconds"] = 0.0;
+      (*phase_seconds)["post_fill_tile_accumulation_seconds"] = 0.0;
+    }
+    calculateWindowDensities();
+    finish_phase("post_fill_window_seconds");
+    return;
+  }
 
-    const double tile_area = static_cast<double>(tile.area());
-    const double metal_area = boost::polygon::area(covered_area);
+  // Normalize and decompose the clipped union once. The resulting rectangles
+  // are disjoint, so overlapping metal/fill shapes contribute area only once.
+  Polygon90Set region_polygon;
+  region_polygon.insert(makeRectangle(region_));
+  Polygon90Set covered_area = metal_shapes & region_polygon;
+  finish_phase("post_fill_union_clip_seconds");
+  std::vector<Rectangle> rectangles;
+  covered_area.get_rectangles(rectangles);
+  finish_phase("post_fill_decompose_seconds");
+
+  // Explicit grid edges preserve partial boundary tiles and negative origins.
+  std::vector<int> x_edges{tiles_.front().xMin()};
+  std::vector<int> y_edges{tiles_.front().yMin()};
+  for (size_t column = 0; column < tile_columns_; column++) {
+    x_edges.push_back(tiles_[column].xMax());
+  }
+  for (size_t first = 0; first < tiles_.size(); first += tile_columns_) {
+    y_edges.push_back(tiles_[first].yMax());
+  }
+
+  std::vector<int64_t> covered_areas(tiles_.size(), 0);
+  for (const Rectangle& rectangle : rectangles) {
+    const size_t first_column
+        = std::upper_bound(x_edges.begin(), x_edges.end(), xl(rectangle))
+          - x_edges.begin() - 1;
+    const size_t last_column
+        = std::lower_bound(x_edges.begin(), x_edges.end(), xh(rectangle))
+          - x_edges.begin();
+    const size_t first_row
+        = std::upper_bound(y_edges.begin(), y_edges.end(), yl(rectangle))
+          - y_edges.begin() - 1;
+    const size_t last_row
+        = std::lower_bound(y_edges.begin(), y_edges.end(), yh(rectangle))
+          - y_edges.begin();
+    for (size_t row = first_row; row < last_row; row++) {
+      for (size_t column = first_column; column < last_column; column++) {
+        const int width = std::min(xh(rectangle), x_edges[column + 1])
+                          - std::max(xl(rectangle), x_edges[column]);
+        const int height = std::min(yh(rectangle), y_edges[row + 1])
+                           - std::max(yl(rectangle), y_edges[row]);
+        covered_areas[row * tile_columns_ + column]
+            += static_cast<int64_t>(width) * height;
+      }
+    }
+  }
+
+  for (size_t index = 0; index < tiles_.size(); index++) {
+    const double tile_area = static_cast<double>(tiles_[index].area());
+    const double metal_area = static_cast<double>(covered_areas[index]);
     metal_areas_.push_back(metal_area);
     metal_densities_.push_back(tile_area == 0.0 ? 0.0 : metal_area / tile_area);
   }
 
+  finish_phase("post_fill_tile_accumulation_seconds");
   calculateWindowDensities();
+  finish_phase("post_fill_window_seconds");
 }
 
 void TileGrid::calculateWindowDensities()

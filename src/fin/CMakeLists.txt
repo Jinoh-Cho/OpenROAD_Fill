@@ -4,6 +4,7 @@
 include("openroad")
 
 find_package(ortools REQUIRED)
+find_package(OpenMP REQUIRED)
 
 swig_lib(NAME      fin
          NAMESPACE fin
@@ -19,6 +20,7 @@ target_sources(fin
     src/FillConfig.cpp
     src/FillGeometry.cpp
     src/FillLpSolver.cpp
+    src/LpDiagnostics.cpp
     src/LipLpFill.cpp
     src/LPFill.cpp
     src/LPFillUtil.cpp
@@ -42,6 +44,7 @@ target_link_libraries(fin
     gui
     Boost::boost
     ortools::ortools
+    OpenMP::OpenMP_CXX
 )
 
 messages(

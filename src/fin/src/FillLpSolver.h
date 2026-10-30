@@ -5,6 +5,10 @@
 
 #include "FixedDissectionLp.h"
 
+namespace operations_research {
+class MPSolver;
+}
+
 namespace fin {
 
 enum class FillLpObjective
@@ -12,6 +16,9 @@ enum class FillLpObjective
   MaximizeMinimumWindowArea,
   MinimizeTotalFillArea
 };
+
+void configureFillLpDualTolerance(const FixedDissectionLpProblem& problem,
+                                  operations_research::MPSolver& solver);
 
 // Shared OR-Tools model for fixed-dissection fill planners.  This is an
 // implementation detail; algorithm-specific modules expose named entry points.

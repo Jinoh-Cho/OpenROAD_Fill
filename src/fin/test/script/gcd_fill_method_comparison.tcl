@@ -6,6 +6,14 @@ set method $::env(FIN_FILL_METHOD)
 if {$method ni {density lp_minvar min_amount}} {
   error "Unknown FIN_FILL_METHOD: $method"
 }
+set lp_threads 1
+if {[info exists ::env(FIN_LP_THREADS)]} {
+  set lp_threads $::env(FIN_LP_THREADS)
+}
+set lp_solver glop
+if {[info exists ::env(FIN_LP_SOLVER)]} {
+  set lp_solver $::env(FIN_LP_SOLVER)
+}
 set resolution 2
 if {[info exists ::env(FIN_RESOLUTION)]} {
   set resolution $::env(FIN_RESOLUTION)
@@ -47,7 +55,7 @@ switch -- $method {
   lp_minvar {
     # Maximize the minimum post-fill window metal area, then place legal fills.
     set placed_fill [fixed_dissection_lp_min_var_fill \
-      -rules $rules \
+      -rules $rules -lp_solver $lp_solver -lp_threads $lp_threads \
       -window 50 \
       -origin {0 0} \
       -resolution $resolution \
@@ -58,7 +66,7 @@ switch -- $method {
   }
   min_amount {
     set placed_fill [fixed_dissection_lp_min_amount_fill \
-      -rules $rules \
+      -rules $rules -lp_solver $lp_solver -lp_threads $lp_threads \
       -window 50 \
       -origin {0 0} \
       -resolution $resolution \

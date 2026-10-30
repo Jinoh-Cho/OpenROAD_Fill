@@ -53,7 +53,12 @@ class LPFill
                 double max_window_density,
                 const char* svg_filename,
                 const char* density_report_filename,
-                FillMethod method);
+                FillMethod method,
+                const char* lp_solver = "glop",
+                int lp_threads = 1,
+                const char* lp_diagnostics = "",
+                int candidate_threads = 1,
+                int placement_threads = 1);
 
  private:
   odb::dbDatabase* db_;

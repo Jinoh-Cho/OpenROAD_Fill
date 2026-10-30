@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <numeric>
+#include <random>
 #include <stdexcept>
 #include <vector>
 
@@ -43,6 +45,103 @@ TEST_F(LPFillUtilTest, SpacingFollowsLayerDirection)
   EXPECT_EQ(lpfill::getSpacing(layer_, config), std::make_pair(1, 3));
 }
 
+TEST_F(LPFillUtilTest, ParallelPlacementPreservesGreedySelectionAndGeometry)
+{
+  std::vector<std::vector<Rectangle>> candidates;
+  std::vector<double> targets;
+  std::vector<double> expected_areas;
+  std::vector<Rectangle> expected_fills;
+  Polygon90Set expected_shapes;
+  // The 4-area target must skip the first (8-area) candidate, then take
+  // exactly one later candidate. Zero targets must select nothing.
+  for (int tile = 0; tile < 128; ++tile) {
+    const int x = tile * 20;
+    const Rectangle first(x, 0, x + 4, 2);
+    const Rectangle second(x + 6, 0, x + 8, 2);
+    const Rectangle third(x + 10, 0, x + 12, 2);
+    candidates.push_back({first, second, third});
+    const double target = tile % 3 == 0 ? 12.0 : (tile % 3 == 1 ? 4.0 : 0.0);
+    targets.push_back(target);
+    expected_areas.push_back(target);
+    if (tile % 3 == 0) {
+      expected_fills.push_back(first);
+      expected_shapes.insert(first);
+    }
+    if (tile % 3 != 2) {
+      expected_fills.push_back(second);
+      expected_shapes.insert(second);
+    }
+  }
+  for (const int threads : {1, 2, 8}) {
+    const auto placed
+        = lpfill::selectLayerFillCandidates(candidates, targets, threads);
+    EXPECT_EQ(placed.fills, expected_fills);
+    EXPECT_EQ(placed.placed_areas, expected_areas);
+    EXPECT_GE(placed.select_seconds, 0.0);
+    EXPECT_LE(placed.select_seconds, placed.wall_seconds);
+    EXPECT_GE(placed.select_work_seconds, 0.0);
+    EXPECT_LE(placed.select_work_seconds, placed.work_seconds);
+    double phase_total = 0.0;
+    for (const auto& [name, value] : placed.phase_seconds) {
+      EXPECT_GE(value, 0.0) << name;
+      phase_total += value;
+    }
+    EXPECT_NEAR(phase_total, placed.wall_seconds, 1e-9);
+    EXPECT_DOUBLE_EQ(placed.phase_seconds.at("placement_select_seconds"),
+                     placed.select_seconds);
+    Polygon90Set missing = expected_shapes - placed.selected_shapes;
+    Polygon90Set extra = placed.selected_shapes - expected_shapes;
+    EXPECT_EQ(boost::polygon::area(missing), 0);
+    EXPECT_EQ(boost::polygon::area(extra), 0);
+    EXPECT_GE(placed.threads, 1);
+    EXPECT_LE(placed.threads, threads);
+  }
+}
+
+TEST_F(LPFillUtilTest, PlacementHandlesEmptyTilesAndRejectsInvalidArguments)
+{
+  const auto empty = lpfill::selectLayerFillCandidates({}, {}, 8);
+  EXPECT_TRUE(empty.fills.empty());
+  EXPECT_TRUE(empty.placed_areas.empty());
+  EXPECT_EQ(empty.threads, 1);
+  const auto blocked = lpfill::selectLayerFillCandidates(
+      {{Rectangle(0, 0, 2, 2)}, {}}, {3.0, 5.0}, 8);
+  EXPECT_TRUE(blocked.fills.empty());
+  EXPECT_EQ(blocked.placed_areas, (std::vector<double>{0.0, 0.0}));
+  EXPECT_THROW(lpfill::selectLayerFillCandidates({{}}, {}, 1),
+               std::invalid_argument);
+  EXPECT_THROW(lpfill::selectLayerFillCandidates({}, {}, 0),
+               std::invalid_argument);
+}
+
+TEST_F(LPFillUtilTest, DensityProfilingPreservesOverlapAndWindowAreas)
+{
+  const TileGridConfig config{odb::Rect(0, 0, 40, 40), odb::Point(0, 0), 20, 2};
+  TileGrid baseline(config);
+  TileGrid profiled(config);
+  Polygon90Set shapes;
+  shapes.insert(Rectangle(0, 0, 20, 20));
+  shapes.insert(Rectangle(10, 10, 30, 30));
+  baseline.calculateMetalDensities(shapes);
+  std::map<std::string, double> phases;
+  profiled.calculateMetalDensities(shapes, &phases);
+  EXPECT_DOUBLE_EQ(profiled.totalMetalArea(), 700.0);
+  EXPECT_EQ(profiled.metalAreas(), baseline.metalAreas());
+  EXPECT_EQ(profiled.metalDensities(), baseline.metalDensities());
+  ASSERT_EQ(profiled.windows().size(), baseline.windows().size());
+  for (size_t index = 0; index < profiled.windows().size(); ++index) {
+    EXPECT_DOUBLE_EQ(profiled.windows()[index].density,
+                     baseline.windows()[index].density);
+  }
+  for (const char* phase : {"post_fill_density_setup_seconds",
+                            "post_fill_union_clip_seconds",
+                            "post_fill_decompose_seconds",
+                            "post_fill_tile_accumulation_seconds",
+                            "post_fill_window_seconds"}) {
+    EXPECT_GE(phases.at(phase), 0.0);
+  }
+}
+
 TEST_F(LPFillUtilTest, TileCandidatesUsePolygonCandidatesAndRespectObstacles)
 {
   const FillShapesConfig config{{{2, 2}}, 1, 1, 1};
@@ -70,6 +169,127 @@ TEST_F(LPFillUtilTest, TileCandidatesUsePolygonCandidatesAndRespectObstacles)
     EXPECT_TRUE(xh(candidate) <= 7 || xl(candidate) >= 13 || yh(candidate) <= 7
                 || yl(candidate) >= 13);
   }
+}
+
+TEST_F(LPFillUtilTest, LayerFillAreasMatchIndependentTileGeometry)
+{
+  const std::vector<TileGridConfig> grids{
+      {odb::Rect(0, 0, 40, 40), odb::Point(0, 0), 20, 4},
+      {odb::Rect(-13, -17, 61, 49), odb::Point(1, 2), 20, 4},
+      {odb::Rect(2, 3, 5, 7), odb::Point(0, 0), 20, 4}};
+  const FillShapesConfig config{{{4, 2}, {2, 2}}, 1, 2, 3};
+  for (const auto direction :
+       {odb::dbTechLayerDir::HORIZONTAL, odb::dbTechLayerDir::VERTICAL}) {
+    layer_->setDirection(direction);
+    for (const auto& grid_config : grids) {
+      const TileGrid grid(grid_config);
+      for (int obstacle_case = 0; obstacle_case < 4; obstacle_case++) {
+        Polygon90Set obstacles;
+        if (obstacle_case == 1) {
+          // Includes holes, overlaps, tile crossings and an outside obstacle
+          // whose spacing halo reaches the grid's edge.
+          for (const Rectangle& rectangle : {Rectangle(-30, -30, -12, 70),
+                                             Rectangle(-5, -5, 23, 7),
+                                             Rectangle(10, -10, 15, 35),
+                                             Rectangle(20, 10, 45, 15),
+                                             Rectangle(20, 25, 45, 30),
+                                             Rectangle(20, 10, 25, 30),
+                                             Rectangle(40, 10, 45, 30)}) {
+            obstacles.insert(rectangle);
+          }
+        } else if (obstacle_case == 2) {
+          obstacles.insert(Rectangle(-100, -100, 100, 100));
+        } else if (obstacle_case == 3) {
+          std::mt19937 generator(12345);
+          std::uniform_int_distribution<int> coordinate(-25, 65);
+          std::uniform_int_distribution<int> length(1, 12);
+          for (int index = 0; index < 40; index++) {
+            const int x = coordinate(generator);
+            const int y = coordinate(generator);
+            obstacles.insert(
+                Rectangle(x, y, x + length(generator), y + length(generator)));
+          }
+        }
+        const Polygon90Set bloated = obstacles + config.space_to_non_fill;
+        const auto prepared = lpfill::makeLayerFillAreas(
+            grid, bloated, layer_, config, nullptr);
+        const auto parallel_prepared = lpfill::makeLayerFillAreas(
+            grid, bloated, layer_, config, nullptr, 16);
+        EXPECT_EQ(prepared.threads, 1);
+        EXPECT_GE(parallel_prepared.threads, 1);
+        EXPECT_LE(parallel_prepared.threads, 16);
+        EXPECT_EQ(parallel_prepared.bloated_non_fill_areas,
+                  prepared.bloated_non_fill_areas);
+        const auto parallel_prepared_candidates
+            = lpfill::makeLayerFillCandidates(
+                parallel_prepared.tile_areas, layer_, config, nullptr, 4);
+        ASSERT_EQ(prepared.tile_areas.size(), grid.tiles().size());
+        ASSERT_EQ(prepared.bloated_non_fill_areas.size(), grid.tiles().size());
+        const auto parallel = lpfill::makeLayerFillCandidates(
+            prepared.tile_areas, layer_, config, nullptr, 4);
+        const auto serial = lpfill::makeLayerFillCandidates(
+            prepared.tile_areas, layer_, config, nullptr, 1);
+        ASSERT_EQ(parallel.tiles, serial.tiles);
+        EXPECT_EQ(parallel_prepared_candidates.tiles, serial.tiles);
+        EXPECT_EQ(serial.threads, 1);
+        EXPECT_GT(parallel.wall_seconds, 0.0);
+        EXPECT_GT(parallel.work_seconds, 0.0);
+        for (size_t index = 0; index < grid.tiles().size(); index++) {
+          SCOPED_TRACE(testing::Message()
+                       << "tile=" << index
+                       << " obstacle_case=" << obstacle_case);
+          const auto& tile = grid.tiles()[index];
+          Polygon90Set expected_area;
+          const auto expected = lpfill::makeTileFillCandidates(
+              tile, obstacles, layer_, config, nullptr, &expected_area);
+          EXPECT_EQ(parallel.tiles[index], expected);
+          Polygon90Set parallel_missing = prepared.tile_areas[index]
+                                          - parallel_prepared.tile_areas[index];
+          Polygon90Set parallel_extra = parallel_prepared.tile_areas[index]
+                                        - prepared.tile_areas[index];
+          EXPECT_EQ(boost::polygon::area(parallel_missing), 0);
+          EXPECT_EQ(boost::polygon::area(parallel_extra), 0);
+          Polygon90Set missing = expected_area - prepared.tile_areas[index];
+          Polygon90Set extra = prepared.tile_areas[index] - expected_area;
+          EXPECT_EQ(boost::polygon::area(missing), 0);
+          EXPECT_EQ(boost::polygon::area(extra), 0);
+          EXPECT_EQ(lpfill::makeTileFillCandidates(
+                        prepared.tile_areas[index], layer_, config, nullptr),
+                    expected);
+          Polygon90Set tile_polygon;
+          tile_polygon.insert(
+              Rectangle(tile.xMin(), tile.yMin(), tile.xMax(), tile.yMax()));
+          EXPECT_DOUBLE_EQ(prepared.bloated_non_fill_areas[index],
+                           boost::polygon::area(bloated & tile_polygon));
+        }
+      }
+    }
+  }
+}
+
+TEST_F(LPFillUtilTest, LayerFillAreasRejectInvalidThreads)
+{
+  const TileGrid grid({odb::Rect(0, 0, 20, 20), odb::Point(0, 0), 20, 4});
+  const FillShapesConfig config{{{4, 2}}, 1, 2, 3};
+  const Polygon90Set obstacles;
+  EXPECT_THROW(
+      lpfill::makeLayerFillAreas(grid, obstacles, layer_, config, nullptr, 0),
+      std::invalid_argument);
+  EXPECT_THROW(
+      lpfill::makeLayerFillAreas(grid, obstacles, layer_, config, nullptr, -1),
+      std::invalid_argument);
+}
+
+TEST_F(LPFillUtilTest, CandidateGenerationHandlesEmptyInputAndInvalidThreads)
+{
+  const FillShapesConfig config{{{4, 2}}, 1, 2, 3};
+  const auto empty
+      = lpfill::makeLayerFillCandidates({}, layer_, config, nullptr, 4);
+  EXPECT_TRUE(empty.tiles.empty());
+  EXPECT_EQ(empty.threads, 1);
+  EXPECT_DOUBLE_EQ(empty.wall_seconds, 0.0);
+  EXPECT_THROW(lpfill::makeLayerFillCandidates({}, layer_, config, nullptr, 0),
+               std::invalid_argument);
 }
 
 double windowDensity(const std::vector<odb::Rect>& rectangles,
@@ -180,6 +400,82 @@ TEST(FillUtillTest, GridAnalysisCountsOverlappingMetalOnce)
   EXPECT_DOUBLE_EQ(grid.totalMetalArea(), 50.0);
   ASSERT_EQ(grid.windows().size(), 1);
   EXPECT_DOUBLE_EQ(grid.windows()[0].density, 0.5);
+}
+
+TEST(FillUtillTest, GridDensityPartitionMatchesIndependentIntersections)
+{
+  const std::vector<TileGridConfig> configs{
+      {odb::Rect(0, 0, 40, 40), odb::Point(0, 0), 20, 4},
+      {odb::Rect(-13, -17, 61, 49), odb::Point(1, 2), 20, 4},
+      {odb::Rect(2, 3, 5, 7), odb::Point(0, 0), 20, 4},
+      {odb::Rect(0, 0, 0, 0), odb::Point(0, 0), 20, 4}};
+  for (const auto& config : configs) {
+    TileGrid grid(config);
+    for (int metal_case = 0; metal_case < 5; metal_case++) {
+      Polygon90Set metal;
+      if (metal_case == 1) {
+        metal.insert(Rectangle(-100, -100, 100, 100));
+      } else if (metal_case == 2) {
+        // Holes, duplicates, overlaps, shared boundaries, and outside metal.
+        for (const auto& rectangle : {Rectangle(-20, -20, 50, -5),
+                                      Rectangle(-20, 15, 50, 30),
+                                      Rectangle(-20, -20, 0, 30),
+                                      Rectangle(30, -20, 50, 30),
+                                      Rectangle(30, -20, 50, 30),
+                                      Rectangle(5, 5, 10, 10),
+                                      Rectangle(10, 5, 15, 10),
+                                      Rectangle(100, 100, 200, 200)}) {
+          metal.insert(rectangle);
+        }
+      } else if (metal_case >= 3) {
+        std::mt19937 generator(12345 + metal_case);
+        std::uniform_int_distribution<int> coordinate(-30, 70);
+        std::uniform_int_distribution<int> length(1, 25);
+        for (int index = 0; index < 100; index++) {
+          const int x = coordinate(generator);
+          const int y = coordinate(generator);
+          metal.insert(
+              Rectangle(x, y, x + length(generator), y + length(generator)));
+        }
+        if (metal_case == 4) {
+          Polygon90Set hole;
+          hole.insert(Rectangle(-3, -7, 28, 33));
+          metal -= hole;
+        }
+      }
+
+      // Reuse the grid across cases to check that previous areas are cleared.
+      grid.calculateMetalDensities(metal);
+      std::vector<double> expected_areas;
+      for (size_t index = 0; index < grid.tiles().size(); index++) {
+        SCOPED_TRACE(testing::Message()
+                     << "tile=" << index << " metal_case=" << metal_case);
+        const auto& tile = grid.tiles()[index];
+        Polygon90Set tile_polygon;
+        tile_polygon.insert(
+            Rectangle(tile.xMin(), tile.yMin(), tile.xMax(), tile.yMax()));
+        const Polygon90Set covered = metal & tile_polygon;
+        const double expected = boost::polygon::area(covered);
+        expected_areas.push_back(expected);
+        EXPECT_DOUBLE_EQ(grid.metalAreas()[index], expected);
+        EXPECT_DOUBLE_EQ(grid.metalDensities()[index], expected / tile.area());
+      }
+      EXPECT_DOUBLE_EQ(
+          grid.totalMetalArea(),
+          std::accumulate(expected_areas.begin(), expected_areas.end(), 0.0));
+      for (const auto& window : grid.windows()) {
+        Polygon90Set window_polygon;
+        window_polygon.insert(Rectangle(window.bounds.xMin(),
+                                        window.bounds.yMin(),
+                                        window.bounds.xMax(),
+                                        window.bounds.yMax()));
+        const Polygon90Set covered = metal & window_polygon;
+        const double expected = boost::polygon::area(covered);
+        EXPECT_DOUBLE_EQ(window.metal_area, expected);
+        EXPECT_DOUBLE_EQ(window.density, expected / window.bounds.area());
+      }
+    }
+  }
 }
 
 TEST(FillUtillTest, SvgWriterDoesNotChangeDensityAnalysis)

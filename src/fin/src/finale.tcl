@@ -91,13 +91,13 @@ proc tile_grid_metal_area { args } {
 }
 
 sta::define_cmd_args "fixed_dissection_lp_min_var_fill" \
-  {[-rules rules_file] [-area {lx ly ux uy}] -window window_size [-origin {x y}] [-resolution resolution] [-min_tile_density density] [-max_tile_density density] [-min_window_density density] [-max_window_density density] [-svg file] [-density_report file]}
+  {[-rules rules_file] [-area {lx ly ux uy}] -window window_size [-origin {x y}] [-resolution resolution] [-min_tile_density density] [-max_tile_density density] [-min_window_density density] [-max_window_density density] [-lp_solver glop|pdlp] [-lp_threads threads] [-candidate_threads threads] [-placement_threads threads] [-lp_diagnostics prefix] [-svg file] [-density_report file]}
 
 sta::define_cmd_args "fixed_dissection_lp_min_amount_fill" \
-  {[-rules rules_file] [-area {lx ly ux uy}] -window window_size [-origin {x y}] [-resolution resolution] [-min_tile_density density] [-max_tile_density density] [-min_window_density density] [-max_window_density density] [-svg file] [-density_report file]}
+  {[-rules rules_file] [-area {lx ly ux uy}] -window window_size [-origin {x y}] [-resolution resolution] [-min_tile_density density] [-max_tile_density density] [-min_window_density density] [-max_window_density density] [-lp_solver glop|pdlp] [-lp_threads threads] [-candidate_threads threads] [-placement_threads threads] [-lp_diagnostics prefix] [-svg file] [-density_report file]}
 
 sta::define_cmd_args "fixed_dissection_lp_lip_fill" \
-  {[-rules rules_file] [-area {lx ly ux uy}] -window window_size -lip_type {1|2|3} [-origin {x y}] [-resolution resolution] [-min_tile_density density] [-max_tile_density density] [-min_window_density density] [-max_window_density density] [-svg file] [-density_report file]}
+  {[-rules rules_file] [-area {lx ly ux uy}] -window window_size -lip_type {1|2|3} [-origin {x y}] [-resolution resolution] [-min_tile_density density] [-max_tile_density density] [-min_window_density density] [-max_window_density density] [-lp_solver glop|pdlp] [-lp_threads threads] [-candidate_threads threads] [-placement_threads threads] [-lp_diagnostics prefix] [-svg file] [-density_report file]}
 
 proc fin::lp_fill_impl { command_name keys_var } {
   upvar 1 $keys_var keys
@@ -109,6 +109,26 @@ proc fin::lp_fill_impl { command_name keys_var } {
     if { ![info exists keys($required)] } {
       utl::error FIN 42 "The $required argument must be specified."
     }
+  }
+  set lp_solver [fin::get_option keys -lp_solver glop]
+  if { $lp_solver ni {glop pdlp} } {
+    error "The -lp_solver argument must be glop or pdlp."
+  }
+  set lp_diagnostics [fin::get_option keys -lp_diagnostics ""]
+  set placement_threads [fin::get_option keys -placement_threads 1]
+  if { ![string is integer -strict $placement_threads] || $placement_threads < 1 } {
+    error "The -placement_threads argument must be a positive integer."
+  }
+  set candidate_threads [fin::get_option keys -candidate_threads 1]
+  if { ![string is integer -strict $candidate_threads] || $candidate_threads < 1 } {
+    error "The -candidate_threads argument must be a positive integer."
+  }
+  set lp_threads [fin::get_option keys -lp_threads 1]
+  if { ![string is integer -strict $lp_threads] || $lp_threads < 1 } {
+    error "The -lp_threads argument must be a positive integer."
+  }
+  if { $lp_solver ne "pdlp" && $lp_threads != 1 } {
+    error "Multiple LP threads require -lp_solver pdlp."
   }
   set max_window_density [fin::get_density_option keys -max_window_density 1.0 43]
   set min_tile_density [fin::get_density_option keys -min_tile_density 0.0 49]
@@ -125,28 +145,28 @@ proc fin::lp_fill_impl { command_name keys_var } {
       $origin \
       $window $resolution $min_tile_density \
       $max_tile_density $min_window_density $max_window_density \
-      $keys(-lip_type) $svg_file $density_report_file]
+      $keys(-lip_type) $svg_file $density_report_file $lp_solver $lp_threads $lp_diagnostics $candidate_threads $placement_threads]
   }
   return [{*}$command_name $keys(-rules) $region \
     $origin \
     $window $resolution $min_tile_density $max_tile_density $min_window_density $max_window_density \
-    $svg_file $density_report_file]
+    $svg_file $density_report_file $lp_solver $lp_threads $lp_diagnostics $candidate_threads $placement_threads]
 }
 
 proc fixed_dissection_lp_min_var_fill { args } {
   sta::parse_key_args "fixed_dissection_lp_min_var_fill" args \
-    keys {-rules -area -window -origin -resolution -min_tile_density -max_tile_density -min_window_density -max_window_density -svg -density_report -lip_type} flags {}
+    keys {-rules -area -window -origin -resolution -min_tile_density -max_tile_density -min_window_density -max_window_density -lp_solver -lp_threads -lp_diagnostics -candidate_threads -placement_threads -svg -density_report -lip_type} flags {}
   return [fin::lp_fill_impl fin::fixed_dissection_lp_min_var_fill_cmd keys]
 }
 
 proc fixed_dissection_lp_min_amount_fill { args } {
   sta::parse_key_args "fixed_dissection_lp_min_amount_fill" args \
-    keys {-rules -area -window -origin -resolution -min_tile_density -max_tile_density -min_window_density -max_window_density -svg -density_report -lip_type} flags {}
+    keys {-rules -area -window -origin -resolution -min_tile_density -max_tile_density -min_window_density -max_window_density -lp_solver -lp_threads -lp_diagnostics -candidate_threads -placement_threads -svg -density_report -lip_type} flags {}
   return [fin::lp_fill_impl fin::fixed_dissection_lp_min_amount_fill_cmd keys]
 }
 
 proc fixed_dissection_lp_lip_fill { args } {
   sta::parse_key_args "fixed_dissection_lp_lip_fill" args \
-    keys {-rules -area -window -origin -resolution -min_tile_density -max_tile_density -min_window_density -max_window_density -svg -density_report -lip_type} flags {}
+    keys {-rules -area -window -origin -resolution -min_tile_density -max_tile_density -min_window_density -max_window_density -lp_solver -lp_threads -lp_diagnostics -candidate_threads -placement_threads -svg -density_report -lip_type} flags {}
   return [fin::lp_fill_impl fin::fixed_dissection_lp_lip_fill_cmd keys]
 }
