@@ -1,5 +1,5 @@
 # Shared worker: run one method on a fresh GCD or IBEX layout.
-# FIN_INPUT_DEF overrides the benchmark DEF. Scalability runs may disable
+# FIN_INPUT_DEF overrides the benchmark DEF/ODB. Scalability runs may disable
 # density analysis and report I/O independently; existing defaults are retained.
 foreach required {FIN_FILL_METHOD FIN_OUTPUT_DIR FIN_RULES} {
   if {![info exists ::env($required)]} {error "$required must be specified."}
@@ -13,7 +13,7 @@ proc comparison_option {name default} {
   return $default
 }
 set benchmark [comparison_option FIN_BENCHMARK gcd]
-if {$benchmark ni {gcd ibex}} {error "Unsupported benchmark: $benchmark"}
+if {$benchmark ni {gcd ibex tpu}} {error "Unsupported benchmark: $benchmark"}
 set lp_solver [comparison_option FIN_LP_SOLVER glop]
 set lp_threads [comparison_option FIN_LP_THREADS 1]
 set candidate_threads [comparison_option FIN_CANDIDATE_THREADS 1]
@@ -52,10 +52,26 @@ foreach required [list $command tile_grid_metal_area fin::layout_feature_counts_
 set test_dir [file dirname [file dirname [file normalize [info script]]]]
 set input_def [comparison_option FIN_INPUT_DEF "$test_dir/prefill_bench/${benchmark}_prefill.def"]
 set load_start [clock milliseconds]
-read_lef "$test_dir/sky130hd/sky130hd.tlef"
-read_lef "$test_dir/sky130hd/sky130_fd_sc_hd_merged.lef"
-read_def $input_def
+if {[string tolower [file extension $input_def]] eq ".odb"} {
+  set input_format odb
+  # The ODB includes technology and libraries. Do not preload duplicate LEFs.
+  read_db $input_def
+} else {
+  set input_format def
+  if {[info exists ::env(FIN_LEF_COUNT)]} {
+    for {set i 0} {$i < $::env(FIN_LEF_COUNT)} {incr i} {
+      read_lef $::env(FIN_LEF_$i)
+    }
+  } else {
+    if {$benchmark eq "tpu"} {error "TPU requires ASAP7 LEF overrides."}
+    read_lef "$test_dir/sky130hd/sky130hd.tlef"
+    read_lef "$test_dir/sky130hd/sky130_fd_sc_hd_merged.lef"
+  }
+  read_def $input_def
+}
 set load_seconds [expr {([clock milliseconds] - $load_start) / 1000.0}]
+puts "COMPARISON_LOAD: input_format=$input_format load_seconds=$load_seconds input=$input_def"
+flush stdout
 set analysis_options [list -rules $rules -window $window -origin {0 0} \
   -resolution $resolution -min_window_density $min_window -max_density $max_window]
 set before_seconds 0.0
@@ -75,6 +91,9 @@ if {$method eq "density"} {
     -resolution $resolution -min_tile_density $min_tile -max_tile_density $max_tile \
     -min_window_density $min_window -max_window_density $max_window]
   if {$write_reports} {lappend fill_options -density_report "$output/lp_fill_report.json"}
+  if {[comparison_option FIN_VERIFY_POST_FILL_DENSITY 0]} {
+    lappend fill_options -verify_post_fill_density 1
+  }
   if {[string match lip* $method]} {lappend fill_options -lip_type [string index $method end]}
   if {[comparison_option FIN_WRITE_SVG 0]} {lappend fill_options -svg "$output/placed_fill"}
   set placed_area [$command {*}$fill_options]

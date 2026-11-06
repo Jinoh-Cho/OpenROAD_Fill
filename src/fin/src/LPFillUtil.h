@@ -40,6 +40,16 @@ LayerFillAreas makeLayerFillAreas(const TileGrid& grid,
                                   Graphics* graphics,
                                   int threads = 1);
 
+// Default nonnegative-spacing path: distribute expanded rectangles first,
+// then subtract obstacles independently per tile.
+LayerFillAreas makeLayerFillAreasFromRectangles(
+    const TileGrid& grid,
+    const std::vector<Rectangle>& expanded_rectangles,
+    odb::dbTechLayer* layer,
+    const FillShapesConfig& config,
+    Graphics* graphics,
+    int threads);
+
 struct LayerFillCandidates
 {
   std::vector<std::vector<Rectangle>> tiles;
@@ -54,6 +64,25 @@ LayerFillCandidates makeLayerFillCandidates(
     const std::vector<Polygon90Set>& tile_areas,
     odb::dbTechLayer* layer,
     const FillShapesConfig& config,
+    Graphics* graphics,
+    int threads);
+
+struct LayerCandidateSummary
+{
+  std::vector<double> tile_areas;
+  std::vector<double> max_fill_areas;
+  std::vector<Polygon90> fillable_polygons;
+  std::vector<double> fillable_region_areas;
+  int threads = 1;
+};
+
+// Consume prepared regions in parallel, retaining tile and polygon order.
+// SVG geometry is extracted only when requested.
+LayerCandidateSummary summarizeLayerFillCandidates(
+    const std::vector<odb::Rect>& tiles,
+    std::vector<Polygon90Set>& tile_areas,
+    const std::vector<std::vector<Rectangle>>& candidates,
+    bool write_svg,
     Graphics* graphics,
     int threads);
 

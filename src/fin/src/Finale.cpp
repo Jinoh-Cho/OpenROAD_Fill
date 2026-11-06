@@ -157,7 +157,8 @@ double Finale::fixedDissectionLpMinVarFill(const char* rules_filename,
                                            int lp_threads,
                                            const char* lp_diagnostics,
                                            int candidate_threads,
-                                           int placement_threads)
+                                           int placement_threads,
+                                           bool verify_post_fill_density)
 {
   LPFill filler(db_, logger_);
   return filler.fillLp(rules_filename,
@@ -176,7 +177,8 @@ double Finale::fixedDissectionLpMinVarFill(const char* rules_filename,
                        lp_threads,
                        lp_diagnostics,
                        candidate_threads,
-                       placement_threads);
+                       placement_threads,
+                       verify_post_fill_density);
 }
 
 double Finale::fixedDissectionLpMinAmountFill(
@@ -195,7 +197,8 @@ double Finale::fixedDissectionLpMinAmountFill(
     int lp_threads,
     const char* lp_diagnostics,
     int candidate_threads,
-    int placement_threads)
+    int placement_threads,
+    bool verify_post_fill_density)
 {
   LPFill filler(db_, logger_);
   return filler.fillLp(rules_filename,
@@ -214,7 +217,8 @@ double Finale::fixedDissectionLpMinAmountFill(
                        lp_threads,
                        lp_diagnostics,
                        candidate_threads,
-                       placement_threads);
+                       placement_threads,
+                       verify_post_fill_density);
 }
 
 double Finale::fixedDissectionLpLipFill(const char* rules_filename,
@@ -233,7 +237,8 @@ double Finale::fixedDissectionLpLipFill(const char* rules_filename,
                                         int lp_threads,
                                         const char* lp_diagnostics,
                                         int candidate_threads,
-                                        int placement_threads)
+                                        int placement_threads,
+                                        bool verify_post_fill_density)
 {
   if (lip_type < 1 || lip_type > 3) {
     throw std::invalid_argument("Lip LP type must be 1, 2, or 3.");
@@ -257,7 +262,8 @@ double Finale::fixedDissectionLpLipFill(const char* rules_filename,
                        lp_threads,
                        lp_diagnostics,
                        candidate_threads,
-                       placement_threads);
+                       placement_threads,
+                       verify_post_fill_density);
 }
 
 }  // namespace fin

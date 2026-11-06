@@ -3,10 +3,16 @@
 
 #include "DensityAnalyzer.h"
 
+#include <omp.h>
+
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <exception>
 #include <limits>
+#include <mutex>
 #include <numeric>
 #include <stdexcept>
 #include <unordered_map>
@@ -427,6 +433,117 @@ void TileGrid::calculateMetalDensities(
   finish_phase("post_fill_tile_accumulation_seconds");
   calculateWindowDensities();
   finish_phase("post_fill_window_seconds");
+}
+
+int TileGrid::calculateMetalDensitiesFromRectangles(
+    const std::vector<Rectangle>& rectangles,
+    int threads,
+    std::map<std::string, double>* phase_seconds)
+{
+  if (threads < 1) {
+    throw std::invalid_argument(
+        "Initial density thread count must be positive.");
+  }
+  using Clock = std::chrono::steady_clock;
+  auto phase_start = Clock::now();
+  const auto finish_phase = [&](const char* name) {
+    const auto end = Clock::now();
+    if (phase_seconds != nullptr) {
+      (*phase_seconds)[name]
+          = std::chrono::duration<double>(end - phase_start).count();
+    }
+    phase_start = end;
+  };
+  metal_areas_.assign(tiles_.size(), 0.0);
+  metal_densities_.assign(tiles_.size(), 0.0);
+  if (phase_seconds != nullptr) {
+    // Union/decomposition is local to each worker, counted in tile_union_area.
+    (*phase_seconds)["post_fill_union_clip_seconds"] = 0.0;
+    (*phase_seconds)["post_fill_decompose_seconds"] = 0.0;
+    (*phase_seconds)["post_fill_tile_accumulation_seconds"] = 0.0;
+  }
+  finish_phase("post_fill_density_setup_seconds");
+  auto tile_metal = partitionRectangles(rectangles);
+  finish_phase("post_fill_partition_seconds");
+  int actual_threads = 1;
+  std::exception_ptr error;
+  std::mutex error_mutex;
+  std::atomic<bool> failed{false};
+  if (!tiles_.empty()) {
+    const int requested = std::min<size_t>(threads, tiles_.size());
+#pragma omp parallel num_threads(requested)
+    {
+#pragma omp single
+      actual_threads = omp_get_num_threads();
+#pragma omp for schedule(dynamic, 1)
+      for (size_t index = 0; index < tiles_.size(); ++index) {
+        if (failed.load(std::memory_order_relaxed)) {
+          continue;
+        }
+        try {
+          const double area = boost::polygon::area(tile_metal[index]);
+          const double tile_area = static_cast<double>(tiles_[index].area());
+          metal_areas_[index] = area;
+          metal_densities_[index] = tile_area == 0.0 ? 0.0 : area / tile_area;
+        } catch (...) {
+          std::lock_guard<std::mutex> lock(error_mutex);
+          if (!error) {
+            error = std::current_exception();
+          }
+          failed.store(true, std::memory_order_relaxed);
+        }
+      }
+    }
+  }
+  if (error) {
+    std::rethrow_exception(error);
+  }
+  finish_phase("post_fill_tile_union_area_seconds");
+  std::vector<Polygon90Set>{}.swap(tile_metal);
+  finish_phase("post_fill_density_cleanup_seconds");
+  calculateWindowDensities();
+  finish_phase("post_fill_window_seconds");
+  return actual_threads;
+}
+
+void TileGrid::addDisjointFillAreas(
+    const std::vector<double>& fill_areas,
+    std::map<std::string, double>* phase_seconds)
+{
+  using Clock = std::chrono::steady_clock;
+  const auto start = phase_seconds ? Clock::now() : Clock::time_point{};
+  if (fill_areas.size() != tiles_.size() || metal_areas_.size() != tiles_.size()
+      || metal_densities_.size() != tiles_.size()) {
+    throw std::invalid_argument(
+        "Incremental density requires initialized metal areas and one fill "
+        "area per tile.");
+  }
+  // Validate all inputs before modifying the cached areas.
+  for (size_t i = 0; i < tiles_.size(); ++i) {
+    if (!std::isfinite(fill_areas[i]) || fill_areas[i] < 0.0
+        || !std::isfinite(metal_areas_[i] + fill_areas[i])
+        || metal_areas_[i] + fill_areas[i]
+               > static_cast<double>(tiles_[i].area()) + 0.5) {
+      throw std::invalid_argument(
+          "Incremental density received an invalid or excessive fill area.");
+    }
+  }
+  for (size_t i = 0; i < tiles_.size(); ++i) {
+    metal_areas_[i] += fill_areas[i];
+    const double tile_area = static_cast<double>(tiles_[i].area());
+    metal_densities_[i] = tile_area == 0.0 ? 0.0 : metal_areas_[i] / tile_area;
+  }
+  const auto window_start = phase_seconds ? Clock::now() : Clock::time_point{};
+  calculateWindowDensities();
+  if (phase_seconds != nullptr) {
+    (*phase_seconds)["post_fill_density_setup_seconds"] = 0.0;
+    (*phase_seconds)["post_fill_union_clip_seconds"] = 0.0;
+    (*phase_seconds)["post_fill_decompose_seconds"] = 0.0;
+    (*phase_seconds)["post_fill_tile_accumulation_seconds"]
+        = std::chrono::duration<double>(window_start - start).count();
+    (*phase_seconds)["post_fill_window_seconds"]
+        = std::chrono::duration<double>(Clock::now() - window_start).count();
+  }
 }
 
 void TileGrid::calculateWindowDensities()

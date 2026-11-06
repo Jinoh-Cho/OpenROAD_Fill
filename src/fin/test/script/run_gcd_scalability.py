@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026, The OpenROAD Authors
-"""Run the original and expanded GCD DEFs through the six-method Tcl worker.
+"""Run original and expanded DEF/ODB layouts through the six-method Tcl worker.
 
 Requires Python 3.6+ and GNU /usr/bin/time. GNU timeout is needed only when
 --timeout is set to a positive value. No Python packages.
@@ -33,12 +33,24 @@ REPO_DIR = TEST_DIR.parents[2]
 METHODS = ("density", "lp_minvar", "min_amount", "lip1", "lip2", "lip3")
 SIZES = ("1x1", "2x5", "10x10", "20x50", "100x100")
 # Disjoint wall-time components of placement (no work-time sums or parents).
+INITIAL_PHASE_FIELDS = (
+    "initial_collect_regular_seconds", "initial_collect_special_seconds",
+    "initial_collect_instances_seconds", "initial_collect_total_seconds",
+    "initial_collect_enumerate_seconds", "initial_collect_merge_seconds",
+    "initial_collect_expansion_retry_seconds", "initial_collect_expansion_fallback_seconds",
+    "initial_density_setup_seconds", "initial_union_clip_seconds",
+    "initial_decompose_seconds", "initial_tile_accumulation_seconds",
+    "initial_window_seconds", "initial_density_total_seconds",
+    "initial_partition_seconds", "initial_tile_union_area_seconds",
+    "initial_density_cleanup_seconds", "initial_input_cleanup_seconds",
+)
 CANDIDATE_PHASE_FIELDS = (
     "candidate_bloat_seconds", "candidate_free_subtract_seconds",
     "candidate_free_decompose_seconds", "candidate_tile_partition_seconds",
     "candidate_tile_spacing_seconds", "candidate_tile_prune_seconds",
     "candidate_tile_prepare_other_seconds", "candidate_summary_seconds",
     "candidate_other_seconds",
+    "candidate_tile_input_cleanup_seconds",
 )
 PLACEMENT_PHASE_FIELDS = (
     "placement_setup_seconds", "placement_select_seconds", "placement_shape_seconds",
@@ -47,22 +59,27 @@ PLACEMENT_PHASE_FIELDS = (
     "db_insert_seconds", "post_fill_density_setup_seconds", "post_fill_union_clip_seconds",
     "post_fill_decompose_seconds", "post_fill_tile_accumulation_seconds",
     "post_fill_window_seconds", "post_fill_density_other_seconds", "placement_other_seconds",
+    "post_fill_validation_seconds",
 )
 FIELDS = (
     "size", "tiles", "method", "repeat", "status", "returncode",
     "load_seconds", "before_analysis_seconds", "fill_seconds", "analysis_seconds",
-    "wall_seconds", "max_rss_kib", "user_seconds", "system_seconds",
+    "wall_seconds", "framework_total_seconds", "max_rss_kib", "user_seconds", "system_seconds",
     "placed_fill_area_dbu2", "added_metal_area_dbu2", "input_bytes",
     "fill_count", "wire_count", "regular_wire_count", "special_wire_count",
     "feature_count_seconds", "lp_solver", "lp_solver_iterations", "lp_dual_tolerance",
     "candidate_generation_seconds",
     "candidate_generation_work_seconds", "candidate_threads", "candidate_prepare_threads",
+    "candidate_summary_threads", "metal_collect_threads", "metal_spacing_fused",
+    "candidate_free_area_tiled",
+    "initial_density_threads", "initial_density_tiled",
     "placement_prepare_seconds", "placement_prepare_work_seconds",
     "post_fill_density_seconds", "placement_threads", "placement_seconds",
     "placement_select_work_seconds",
     *CANDIDATE_PHASE_FIELDS,
+    *INITIAL_PHASE_FIELDS,
     *PLACEMENT_PHASE_FIELDS,
-    "timeout_seconds", "input_def", "log", "error",
+    "timeout_seconds", "input_def", "input_format", "log", "error",
 )
 
 
@@ -85,8 +102,15 @@ def parse_args():
     parser.add_argument("--sizes", nargs="+", default=SIZES)
     parser.add_argument("--methods", nargs="+", choices=METHODS, default=METHODS)
     parser.add_argument("--input-dir", type=Path, default=TEST_DIR / "prefill_bench/expanded")
+    parser.add_argument("--input-prefix", default="gcd_prefill_",
+                        help="Expanded filename prefix before SIZE.def or SIZE.odb")
+    parser.add_argument("--input-format", choices=("def", "odb"), default="def",
+                        help="Expanded input format; ODB includes its LEFs (default: def)")
+    parser.add_argument("--benchmark", choices=("gcd", "ibex", "tpu"), default="gcd")
+    parser.add_argument("--lefs", nargs="+", type=Path,
+                        help="Override worker LEFs, technology LEF first")
     parser.add_argument("--baseline-def", type=Path, default=TEST_DIR / "prefill_bench/gcd_prefill.def",
-                        help="Original DEF used for the 1x1 baseline")
+                        help="Original DEF or ODB used for the 1x1 baseline")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--openroad", type=Path, default=Path(os.environ.get("OPENROAD_BIN", str(REPO_DIR / "bazel-bin/openroad"))))
     parser.add_argument("--rules", type=Path, default=TEST_DIR / "fill.json")
@@ -95,9 +119,17 @@ def parse_args():
                         help="PDLP dual absolute/relative tolerance; primal/gap stay at 1e-6")
     parser.add_argument("--solver-log", action="store_true",
                         help="Record backend convergence statistics in openroad.log")
+    parser.add_argument("--verify-post-fill-density", action="store_true",
+                        help="Verify incremental tile/window areas using a full polygon density calculation")
     parser.add_argument("--lp-threads", type=int, default=1, help="PDLP solver threads (default: 1)")
     parser.add_argument("--candidate-threads", type=int, default=1,
                         help="Independent LP candidate-generation threads (default: 1)")
+    parser.add_argument("--candidate-summary-threads", type=int,
+                        help="Candidate area/SVG summary threads (default: candidate threads)")
+    parser.add_argument("--serial-metal-collection", action="store_true",
+                        help="Experiment: force only initial metal collection to 1 thread")
+    parser.add_argument("--write-svg", action="store_true",
+                        help="Extract and write fill SVG geometry (default: off)")
     parser.add_argument("--placement-threads", type=int, default=1,
                         help="LP candidate selection/geometry threads; DB insertion stays serial (default: 1)")
     parser.add_argument("--resolution", type=int, default=4)
@@ -125,6 +157,8 @@ def parse_args():
         parser.error("threads/lp-threads/resolution/repeats/window must be positive; timeout must be nonnegative")
     if args.lp_solver != "pdlp" and args.lp_threads != 1:
         parser.error("--lp-threads other than 1 requires --lp-solver pdlp")
+    if args.candidate_summary_threads is not None and args.candidate_summary_threads < 1:
+        parser.error("--candidate-summary-threads must be positive")
     if args.dual_tolerance is not None:
         if args.lp_solver != "pdlp" or not math.isfinite(args.dual_tolerance) or args.dual_tolerance <= 0:
             parser.error("--dual-tolerance must be finite, positive and used with PDLP")
@@ -141,17 +175,31 @@ def parse_args():
         args.output_dir = TEST_DIR / "results" / stamp[:8] / "gcd" / ("scalability_" + stamp)
     for name in ("input_dir", "baseline_def", "output_dir", "openroad", "rules"):
         setattr(args, name, getattr(args, name).resolve())
+    if args.lefs:
+        args.lefs = [path.resolve() for path in args.lefs]
+        for path in args.lefs:
+            if not path.is_file():
+                parser.error("LEF not found: " + str(path))
+    needs_lefs = (args.input_format == "def"
+                  or ("1x1" in args.sizes and args.baseline_def.suffix.lower() != ".odb"))
+    if args.benchmark == "tpu" and needs_lefs and not args.lefs:
+        parser.error("TPU requires --lefs with ASAP7 technology and cell LEFs")
     return args
 
 
 def worker_env(args):
-    return {
+    result = {
         "FIN_LP_SOLVER": args.lp_solver, "FIN_LP_THREADS": str(args.lp_threads),
         "FIN_LP_SOLVER_LOG": str(int(args.solver_log)),
+        "FIN_VERIFY_POST_FILL_DENSITY": str(int(args.verify_post_fill_density)),
         "FIN_LP_DUAL_TOLERANCE": str(args.dual_tolerance if args.dual_tolerance is not None else 0),
         "FIN_CANDIDATE_THREADS": str(args.candidate_threads),
+        "FIN_SERIAL_METAL_COLLECTION": str(int(args.serial_metal_collection)),
+        "FIN_CANDIDATE_SUMMARY_THREADS": str(args.candidate_summary_threads
+                                             if args.candidate_summary_threads is not None
+                                             else args.candidate_threads),
         "FIN_PLACEMENT_THREADS": str(args.placement_threads),
-        "FIN_BENCHMARK": "gcd", "FIN_RULES": str(args.rules),
+        "FIN_BENCHMARK": args.benchmark, "FIN_RULES": str(args.rules),
         "FIN_RESOLUTION": str(args.resolution), "FIN_WINDOW": str(args.window),
         "FIN_MIN_TILE_DENSITY": str(args.min_tile_density),
         "FIN_MAX_TILE_DENSITY": str(args.max_tile_density),
@@ -159,16 +207,23 @@ def worker_env(args):
         "FIN_MAX_WINDOW_DENSITY": str(args.max_window_density),
         "FIN_RUN_ANALYSIS": str(int(args.analysis)),
         "FIN_TRACE_CANDIDATES": str(int(args.trace_candidates)),
-        "FIN_WRITE_REPORTS": str(int(args.write_reports)), "FIN_WRITE_SVG": "0",
+        "FIN_WRITE_REPORTS": str(int(args.write_reports)), "FIN_WRITE_SVG": str(int(args.write_svg)),
         "FIN_FLOATING_DENSITY_ALGORITHMS": " ".join(args.algorithms),
         "OMP_NUM_THREADS": str(args.threads),
     }
+    if args.lefs:
+        result["FIN_LEF_COUNT"] = str(len(args.lefs))
+        result.update({"FIN_LEF_%d" % i: str(path) for i, path in enumerate(args.lefs)})
+    return result
 
 
 def manifest(args):
     return {
         "schema_version": 1, "input_dir": str(args.input_dir),
         "baseline_def": str(args.baseline_def),
+        "input_prefix": args.input_prefix,
+        "input_format": args.input_format,
+        "lef_sha256": {str(path): digest(path) for path in (args.lefs or [])},
         "openroad": str(args.openroad), "openroad_sha256": digest(args.openroad),
         "runner_sha256": digest(Path(__file__)),
         "worker_sha256": digest(SCRIPT_DIR / "gcd_six_method_comparison.tcl"),
@@ -178,8 +233,9 @@ def manifest(args):
 
 
 def input_path(args, size):
-    path = args.baseline_def if size == "1x1" else args.input_dir / ("gcd_prefill_" + size + ".def")
-    if path.suffix == ".gz":
+    extension = "." + getattr(args, "input_format", "def")
+    path = args.baseline_def if size == "1x1" else args.input_dir / (args.input_prefix + size + extension)
+    if path.suffix.lower() == ".odb" or path.suffix == ".gz":
         return path
     compressed = path.with_suffix(".def.gz")
     return compressed if not path.exists() and compressed.exists() else path
@@ -224,13 +280,50 @@ def candidate_generation_metrics(log_path):
         r"(?: candidate_generation_work_seconds=([0-9.eE+-]+) candidate_threads=(\d+))?")
     phases = {}
     preparation_threads = []
+    summary_threads = []
+    collection_threads = []
+    fused_spacing = []
+    density_threads = []
+    density_modes = []
+    density_pattern = re.compile(
+        r"\[Fill LP\] initial density layer=\S+ initial_density_threads=(\d+) initial_density_mode=(tile|global)")
+    tiled_modes = []
+    mode_pattern = re.compile(
+        r"\[Fill LP\] candidate preparation layer=\S+ candidate_prepare_threads=\d+ free_area_mode=(tile|global)")
+    fused_pattern = re.compile(
+        r"\[Fill LP\] metal collection layer=\S+ metal_collect_threads=\d+ spacing_fused=(\d+)")
+    collection_pattern = re.compile(
+        r"\[Fill LP\] metal collection layer=\S+ metal_collect_threads=(\d+)")
+    summary_pattern = re.compile(
+        r"\[Fill LP\] candidate summary layer=\S+ candidate_summary_threads=(\d+)")
     preparation_pattern = re.compile(
         r"\[Fill LP\] candidate preparation layer=\S+ candidate_prepare_threads=(\d+)")
     phase_pattern = re.compile(
         r"\[Fill LP\] candidate phase layer=(\S+) name=(\S+) seconds=([0-9.eE+-]+)")
+    initial_pattern = re.compile(
+        r"\[Fill LP\] initial phase layer=\S+ name=(\S+) seconds=([0-9.eE+-]+)")
     layers = []
     with log_path.open(errors="replace") as stream:
         for line in stream:
+            density = density_pattern.search(line)
+            if density:
+                density_threads.append(int(density[1]))
+                density_modes.append(density[2] == "tile")
+            mode = mode_pattern.search(line)
+            if mode:
+                tiled_modes.append(mode[1] == "tile")
+            fused = fused_pattern.search(line)
+            if fused:
+                fused_spacing.append(int(fused[1]))
+            collection = collection_pattern.search(line)
+            if collection:
+                collection_threads.append(int(collection[1]))
+            initial = initial_pattern.search(line)
+            if initial and initial[1] in INITIAL_PHASE_FIELDS:
+                phases[initial[1]] = phases.get(initial[1], 0.0) + float(initial[2])
+            summary = summary_pattern.search(line)
+            if summary:
+                summary_threads.append(int(summary[1]))
             preparation = preparation_pattern.search(line)
             if preparation:
                 preparation_threads.append(int(preparation[1]))
@@ -244,8 +337,19 @@ def candidate_generation_metrics(log_path):
                 if match[4] is not None:
                     entry.update(work_seconds=float(match[4]), threads=int(match[5]))
                 layers.append(entry)
+    if collection_threads:
+        phases["metal_collect_threads"] = max(collection_threads)
+    if density_threads:
+        phases["initial_density_threads"] = max(density_threads)
+        phases["initial_density_tiled"] = int(all(density_modes))
+    if fused_spacing:
+        phases["metal_spacing_fused"] = int(all(fused_spacing))
+    if tiled_modes:
+        phases["candidate_free_area_tiled"] = int(all(tiled_modes))
     if preparation_threads:
         phases["candidate_prepare_threads"] = max(preparation_threads)
+    if summary_threads:
+        phases["candidate_summary_threads"] = max(summary_threads)
     if not layers:
         return phases
     result = {"candidate_generation_seconds": sum(layer["seconds"] for layer in layers),
@@ -380,6 +484,11 @@ def execute(args, case_dir, record):
                 returncode = process.wait()
     record.update(returncode=returncode, wall_seconds=time.monotonic() - started)
     record.update(timing_metrics(output / "resources.txt"))
+    # End-to-end elapsed time, including input loading and process teardown.
+    record["framework_total_seconds"] = record["wall_seconds"]
+    with (output / "openroad.log").open("a") as log:
+        log.write("FRAMEWORK_TOTAL: framework_total_seconds=%.6f returncode=%d\n" %
+                  (record["framework_total_seconds"], returncode))
     generation_metrics = candidate_generation_metrics(output / "openroad.log")
     generation_metrics.update(placement_metrics(output / "openroad.log"))
     generation_metrics.update(solver_metrics(output / "openroad.log"))
@@ -398,13 +507,17 @@ def execute(args, case_dir, record):
                 raise ValueError("Unexpected method or fill_seconds")
             if generation_metrics:
                 summary.update(generation_metrics)
-                atomic_json(output / "run_summary.json", summary)
+            summary["framework_total_seconds"] = record["framework_total_seconds"]
+            atomic_json(output / "run_summary.json", summary)
             record.update({key: summary[key] for key in FIELDS if key in summary and key != "method"})
             if "feature_counts_by_layer" in summary:
                 record["feature_counts_by_layer"] = summary["feature_counts_by_layer"]
             failure = fill_failure(output / "openroad.log")
             if failure:
                 record.update(status="fill_failed", error=failure)
+            elif args.serial_metal_collection and record.get("metal_collect_threads") != 1:
+                record.update(status="configuration_mismatch",
+                              error="Serial metal collection was not applied; rebuild OpenROAD and inspect metal_collect_threads")
             else:
                 record["status"] = "ok"
         except (OSError, ValueError, KeyError) as error:
@@ -428,6 +541,7 @@ def run_case(args, size, method, repeat):
     nx, ny = map(int, size.split("x"))
     record = {"size": size, "tiles": nx * ny, "method": method, "repeat": repeat,
               "input_def": str(path), "input_fingerprint": fingerprint,
+              "input_format": "odb" if path.suffix.lower() == ".odb" else "def",
               "input_bytes": fingerprint["bytes"] if fingerprint else None,
               "timeout_seconds": args.timeout, "started_at": datetime.now().isoformat()}
     print("RUN %s %s repeat=%d" % (size, method, repeat), flush=True)

@@ -14,9 +14,27 @@ import sys
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_DIR = SCRIPT_DIR.parents[3]
 PHASES = [
+    ("ODB/DEF loading", "load_seconds"),
+    ("Metal collection threads", "metal_collect_threads"),
+    ("Spacing fused into collection (1=yes)", "metal_spacing_fused"),
+    ("Tile-local free-area preparation (1=yes)", "candidate_free_area_tiled"),
+    ("Metal collection total (includes fused spacing)", "initial_collect_total_seconds"),
+    ("  Regular wires", "initial_collect_regular_seconds"),
+    ("  Special wires/vias", "initial_collect_special_seconds"),
+    ("  Instances", "initial_collect_instances_seconds"),
+    ("Initial density total", "initial_density_total_seconds"),
+    ("Initial density threads", "initial_density_threads"),
+    ("Tile-local initial density (1=yes)", "initial_density_tiled"),
+    ("  Initial rectangle distribution", "initial_partition_seconds"),
+    ("  Initial tile union/area", "initial_tile_union_area_seconds"),
+    ("  Initial density buffer cleanup", "initial_density_cleanup_seconds"),
+    ("  Initial source input cleanup", "initial_input_cleanup_seconds"),
+    ("  Initial union/clip", "initial_union_clip_seconds"),
+    ("  Initial rectangle decomposition", "initial_decompose_seconds"),
+    ("  Initial tile area accumulation", "initial_tile_accumulation_seconds"),
     ("Initial geometry/density and other compute", "initial_other_seconds"),
     ("Candidate preparation (total)", "candidates_total_seconds"),
-    ("Metal spacing expansion", "candidate_bloat_seconds"),
+    ("Separate metal spacing expansion (0 when fused)", "candidate_bloat_seconds"),
     ("Free-area subtraction", "candidate_free_subtract_seconds"),
     ("Free-area rectangle decomposition", "candidate_free_decompose_seconds"),
     ("Rectangle distribution to tiles", "candidate_tile_partition_seconds"),
@@ -42,18 +60,22 @@ PHASES = [
     ("  Decompose", "post_fill_decompose_seconds"),
     ("  Tile accumulation", "post_fill_tile_accumulation_seconds"),
     ("  Window density", "post_fill_window_seconds"),
+    ("  Full geometry verification (optional)", "post_fill_validation_seconds"),
     ("  Density setup", "post_fill_density_setup_seconds"),
     ("  Density other", "post_fill_density_other_seconds"),
     ("Placement other", "placement_other_seconds"),
     ("Placement (total)", "placement_seconds"),
     ("Fill (total)", "fill_seconds"),
-    ("Process wall (total)", "wall_seconds"),
+    ("Feature counting after fill", "feature_count_seconds"),
+    ("Framework TOTAL (load + fill + postprocessing + exit)", "wall_seconds"),
 ]
 
 
-def summarize(root, sizes=("10x10", "20x20"), method="min_amount"):
+def summarize(root, sizes=("10x10", "20x20"), method="min_amount",
+              baseline_threads=1, parallel_threads=16, lp_threads=16):
+    thread_counts = (baseline_threads, parallel_threads)
     groups = {}
-    for threads in (1, 16):
+    for threads in thread_counts:
         path = root / ("candidate_%d_placement_%d" % (threads, threads)) / "summary.csv"
         rows = list(csv.DictReader(path.open())) if path.exists() else []
         for row in rows:
@@ -87,17 +109,19 @@ def summarize(root, sizes=("10x10", "20x20"), method="min_amount"):
     lines = ["# Candidate + placement thread comparison", "",
              "Method: " + method, "",
              "Elapsed seconds only; successful runs with matching thread counts.",
-             "LP threads fixed at 16. Parent totals include their subphases; do not add them again.", ""]
+             "LP threads fixed at %d. Parent totals include their subphases; do not add them again." % lp_threads, ""]
     for size in sizes:
         lines += ["## " + size, "",
-                  "Valid runs: 1/1 = %d; 16/16 = %d." %
-                  (len(groups[size, 1]), len(groups[size, 16])), "",
+                  "Valid runs: %d/%d = %d; %d/%d = %d." %
+                  (baseline_threads, baseline_threads, len(groups[size, baseline_threads]),
+                   parallel_threads, parallel_threads, len(groups[size, parallel_threads])), "",
                   ]
         lines += ["", "Solver iterations (median; total across layers):", "",
-                  "| Metric | C1/P1 | C16/P16 |", "|---|---:|---:|"]
+                  "| Metric | C%d/P%d | C%d/P%d |" %
+                  (baseline_threads, baseline_threads, parallel_threads, parallel_threads), "|---|---:|---:|"]
         solver_names = []
         counts = []
-        for threads in (1, 16):
+        for threads in thread_counts:
             names = sorted({row["lp_solver"] for row in groups[size, threads]
                             if row.get("lp_solver")})
             solver_names.append(" / ".join(names) if names else "—")
@@ -110,15 +134,21 @@ def summarize(root, sizes=("10x10", "20x20"), method="min_amount"):
         lines += ["| Solver | %s | %s |" % tuple(solver_names),
                   "| Iterations | %s | %s |" % tuple(counts), "",
                   "Elapsed runtime:", "",
-                  "| Phase | C1/P1 seconds | C16/P16 seconds | Saved seconds | Speedup |",
+                  "| Phase | C%d/P%d seconds | C%d/P%d seconds | Saved seconds | Speedup |" %
+                  (baseline_threads, baseline_threads, parallel_threads, parallel_threads),
                   "|---|---:|---:|---:|---:|"]
         for label, field in PHASES:
-            baseline = median(size, 1, field)
-            parallel = median(size, 16, field)
-            saved = baseline - parallel if baseline is not None and parallel is not None else None
+            baseline = median(size, baseline_threads, field)
+            parallel = median(size, parallel_threads, field)
+            is_time = field.endswith("_seconds")
+            saved = baseline - parallel if is_time and baseline is not None and parallel is not None else None
             speedup = baseline / parallel if saved is not None and parallel > 0 else None
-            output.append(dict(size=size, phase=field, seconds_1=baseline,
-                               seconds_16=parallel, saved_seconds=saved, speedup=speedup))
+            output.append(dict(size=size, phase=field,
+                               baseline_threads=baseline_threads, parallel_threads=parallel_threads,
+                               baseline_seconds=baseline, parallel_seconds=parallel,
+                               seconds_1=baseline if baseline_threads == 1 else None,
+                               seconds_16=parallel if parallel_threads == 16 else None,
+                               saved_seconds=saved, speedup=speedup))
             values = ["—" if value is None else "%.6f" % value
                       for value in (baseline, parallel, saved, speedup)]
             lines.append("| %s | %s |" % (label.strip(), " | ".join(values)))
@@ -150,6 +180,7 @@ def main():
     parser.add_argument("--dual-tolerance", type=float)
     parser.add_argument("--solver-log", action="store_true",
                         help="Record solver residuals/objectives/gap in openroad.log")
+    parser.add_argument("--verify-post-fill-density", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
@@ -179,6 +210,8 @@ def main():
             command += ["--openroad", str(args.openroad.resolve())]
         if args.dual_tolerance is not None:
             command += ["--dual-tolerance", str(args.dual_tolerance)]
+        if args.verify_post_fill_density:
+            command += ["--verify-post-fill-density"]
         if args.solver_log:
             command.append("--solver-log")
         if args.dry_run:

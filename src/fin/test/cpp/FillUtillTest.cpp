@@ -37,6 +37,82 @@ class LPFillUtilTest : public testing::Test
   odb::dbTechLayer* layer_ = nullptr;
 };
 
+TEST(LPFillSummaryTest, ParallelSummaryPreservesAreasAndSvgOrder)
+{
+  std::vector<odb::Rect> tiles;
+  std::vector<Polygon90Set> regions;
+  std::vector<std::vector<Rectangle>> candidates;
+  std::vector<Polygon90> expected_polygons;
+  std::vector<double> expected_capacities;
+  std::vector<double> expected_region_areas;
+  for (int index = 0; index < 128; ++index) {
+    const int x = index * 20 - 1000;
+    tiles.emplace_back(x, 0, x + 20, 20);
+    Polygon90Set region;
+    std::vector<Rectangle> rectangles;
+    if (index % 3 != 0) {
+      // Two disconnected regions, including a hole in the larger one.
+      region.insert(Rectangle(x, 0, x + 10, 10));
+      region -= Rectangle(x + 2, 2, x + 8, 8);
+      region.insert(Rectangle(x + 12, 0, x + 16, 4));
+      rectangles
+          = {Rectangle(x, 0, x + 10, 2), Rectangle(x + 12, 0, x + 16, 4)};
+    }
+    std::vector<Polygon90> polygons;
+    region.get(polygons);
+    expected_polygons.insert(
+        expected_polygons.end(), polygons.begin(), polygons.end());
+    expected_region_areas.push_back(boost::polygon::area(region));
+    expected_capacities.push_back(index % 3 == 0 ? 0.0 : 36.0);
+    regions.push_back(region);
+    candidates.push_back(rectangles);
+  }
+  for (bool svg : {false, true}) {
+    for (int threads : {1, 16}) {
+      auto consumed = regions;
+      const auto result = lpfill::summarizeLayerFillCandidates(
+          tiles, consumed, candidates, svg, nullptr, threads);
+      EXPECT_TRUE(consumed.empty());
+      EXPECT_EQ(result.tile_areas, std::vector<double>(tiles.size(), 400.0));
+      EXPECT_EQ(result.max_fill_areas, expected_capacities);
+      ASSERT_EQ(result.fillable_polygons.size(),
+                svg ? expected_polygons.size() : 0);
+      for (size_t index = 0; index < result.fillable_polygons.size(); ++index) {
+        const auto& actual = result.fillable_polygons[index];
+        const auto& expected = expected_polygons[index];
+        EXPECT_TRUE(std::equal(actual.begin_compact(),
+                               actual.end_compact(),
+                               expected.begin_compact(),
+                               expected.end_compact()));
+        ASSERT_EQ(actual.size_holes(), expected.size_holes());
+        auto hole = actual.begin_holes();
+        for (auto expected_hole = expected.begin_holes();
+             expected_hole != expected.end_holes();
+             ++expected_hole, ++hole) {
+          EXPECT_TRUE(std::equal(hole->begin_compact(),
+                                 hole->end_compact(),
+                                 expected_hole->begin_compact(),
+                                 expected_hole->end_compact()));
+        }
+      }
+      EXPECT_EQ(result.fillable_region_areas,
+                svg ? expected_region_areas : std::vector<double>{});
+      EXPECT_GE(result.threads, 1);
+      EXPECT_LE(result.threads, threads);
+    }
+  }
+  std::vector<Polygon90Set> empty;
+  EXPECT_THROW(lpfill::summarizeLayerFillCandidates(
+                   tiles, empty, candidates, false, nullptr, 1),
+               std::invalid_argument);
+  EXPECT_THROW(
+      lpfill::summarizeLayerFillCandidates({}, empty, {}, false, nullptr, 0),
+      std::invalid_argument);
+  EXPECT_TRUE(
+      lpfill::summarizeLayerFillCandidates({}, empty, {}, true, nullptr, 16)
+          .tile_areas.empty());
+}
+
 TEST_F(LPFillUtilTest, SpacingFollowsLayerDirection)
 {
   const FillShapesConfig config{{{2, 2}}, 1, 1, 3};
@@ -140,6 +216,62 @@ TEST_F(LPFillUtilTest, DensityProfilingPreservesOverlapAndWindowAreas)
                             "post_fill_window_seconds"}) {
     EXPECT_GE(phases.at(phase), 0.0);
   }
+}
+
+TEST_F(LPFillUtilTest,
+       IncrementalDensityMatchesGeometryWithClippedBoundaryTiles)
+{
+  const TileGridConfig config{
+      odb::Rect(-7, -5, 43, 38), odb::Point(-3, -1), 20, 2};
+  TileGrid incremental(config);
+  TileGrid reference(config);
+  Polygon90Set metal;
+  Polygon90Set fills;
+  std::vector<double> fill_areas(incremental.tiles().size(), 0.0);
+  for (size_t i = 0; i < incremental.tiles().size(); ++i) {
+    const auto& tile = incremental.tiles()[i];
+    if (tile.dx() < 4 || tile.dy() < 4) {
+      continue;
+    }
+    metal.insert(
+        Rectangle(tile.xMin(), tile.yMin(), tile.xMin() + 2, tile.yMin() + 2));
+    // Duplicate existing geometry must be unioned only in the initial pass.
+    metal.insert(
+        Rectangle(tile.xMin(), tile.yMin(), tile.xMin() + 2, tile.yMin() + 2));
+    fills.insert(
+        Rectangle(tile.xMax() - 1, tile.yMax() - 1, tile.xMax(), tile.yMax()));
+    fill_areas[i] = 1.0;
+  }
+  incremental.calculateMetalDensities(metal);
+  std::map<std::string, double> phases;
+  incremental.addDisjointFillAreas(fill_areas, &phases);
+  reference.calculateMetalDensities(metal + fills);
+  EXPECT_EQ(incremental.metalAreas(), reference.metalAreas());
+  EXPECT_EQ(incremental.metalDensities(), reference.metalDensities());
+  ASSERT_EQ(incremental.windows().size(), reference.windows().size());
+  ASSERT_FALSE(reference.windows().empty());
+  for (size_t i = 0; i < reference.windows().size(); ++i) {
+    EXPECT_DOUBLE_EQ(incremental.windows()[i].metal_area,
+                     reference.windows()[i].metal_area);
+    EXPECT_DOUBLE_EQ(incremental.windows()[i].density,
+                     reference.windows()[i].density);
+  }
+  EXPECT_DOUBLE_EQ(phases.at("post_fill_union_clip_seconds"), 0.0);
+  EXPECT_DOUBLE_EQ(phases.at("post_fill_decompose_seconds"), 0.0);
+  const auto areas = incremental.metalAreas();
+  incremental.addDisjointFillAreas(std::vector<double>(areas.size(), 0.0));
+  EXPECT_EQ(incremental.metalAreas(), areas);
+}
+
+TEST_F(LPFillUtilTest, IncrementalDensityRejectsInvalidAreasBeforeUpdating)
+{
+  TileGrid grid({odb::Rect(0, 0, 20, 10), odb::Point(0, 0), 10, 1});
+  EXPECT_THROW(grid.addDisjointFillAreas({0.0, 0.0}), std::invalid_argument);
+  grid.calculateMetalDensities(Polygon90Set{});
+  EXPECT_THROW(grid.addDisjointFillAreas({0.0}), std::invalid_argument);
+  EXPECT_THROW(grid.addDisjointFillAreas({1.0, -1.0}), std::invalid_argument);
+  EXPECT_THROW(grid.addDisjointFillAreas({1.0, 101.0}), std::invalid_argument);
+  EXPECT_EQ(grid.metalAreas(), (std::vector<double>{0.0, 0.0}));
 }
 
 TEST_F(LPFillUtilTest, TileCandidatesUsePolygonCandidatesAndRespectObstacles)

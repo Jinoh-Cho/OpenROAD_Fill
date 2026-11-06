@@ -3,6 +3,7 @@
 
 #include "TileGrid.h"
 
+#include <algorithm>
 #include <numeric>
 #include <stdexcept>
 
@@ -96,6 +97,52 @@ std::vector<std::vector<size_t>> TileGrid::windowTileIndices(
     window_tiles.push_back(std::move(tile_indices));
   }
   return window_tiles;
+}
+
+std::vector<Polygon90Set> TileGrid::partitionRectangles(
+    const std::vector<Rectangle>& rectangles) const
+{
+  const auto& tiles = tiles_;
+  std::vector<Polygon90Set> result(tiles.size());
+  if (tiles.empty()) {
+    return result;
+  }
+  std::vector<int> xs{tiles.front().xMin()}, ys{tiles.front().yMin()};
+  const size_t columns = tile_columns_;
+  for (size_t i = 0; i < columns; ++i) {
+    xs.push_back(tiles[i].xMax());
+  }
+  for (size_t i = 0; i < tiles.size(); i += columns) {
+    ys.push_back(tiles[i].yMax());
+  }
+  // Clip each source into all touched tiles. Spacing callers expand beforehand.
+  for (const auto& rectangle : rectangles) {
+    const int left = std::max(xl(rectangle), xs.front());
+    const int bottom = std::max(yl(rectangle), ys.front());
+    const int right = std::min(xh(rectangle), xs.back());
+    const int top = std::min(yh(rectangle), ys.back());
+    if (left >= right || bottom >= top) {
+      continue;
+    }
+    const size_t first_x
+        = std::upper_bound(xs.begin(), xs.end(), left) - xs.begin() - 1;
+    const size_t last_x
+        = std::lower_bound(xs.begin(), xs.end(), right) - xs.begin();
+    const size_t first_y
+        = std::upper_bound(ys.begin(), ys.end(), bottom) - ys.begin() - 1;
+    const size_t last_y
+        = std::lower_bound(ys.begin(), ys.end(), top) - ys.begin();
+    for (size_t row = first_y; row < last_y; ++row) {
+      for (size_t col = first_x; col < last_x; ++col) {
+        result[row * columns + col].insert(
+            Rectangle(std::max(left, xs[col]),
+                      std::max(bottom, ys[row]),
+                      std::min(right, xs[col + 1]),
+                      std::min(top, ys[row + 1])));
+      }
+    }
+  }
+  return result;
 }
 
 }  // namespace fin

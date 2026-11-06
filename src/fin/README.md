@@ -72,6 +72,7 @@ fixed_dissection_lp_min_var_fill
     [-lp_threads threads]
     [-candidate_threads threads]
     [-placement_threads threads]
+    [-verify_post_fill_density bool]
     [-lp_diagnostics prefix]
     [-svg file]
 ```
@@ -103,6 +104,16 @@ OpenDB insertion and the final density calculation stay serial. Debug graphics
 or detailed tracing force serial placement preparation. Logs and density reports
 split placement into preparation, DB insertion, and post-fill density time;
 preparation includes the ordered merge and its work-time sum excludes that merge.
+
+Post-fill tile and window densities reuse the initial metal areas plus actual
+selected fill areas. This relies on candidates being disjoint from existing metal
+and each other, and contained in their tile. `-verify_post_fill_density 1` also
+runs the full polygon union/clip density calculation and checks every tile and
+window area against the incremental result. A difference exceeding 0.5 DBU²
+raises an error. Verification is disabled by default; arbitrary geometry and
+initial densities continue to use the full geometry calculation.
+The optional cost is recorded as `post_fill_validation_seconds` within the
+post-fill density total.
 
 Placement additionally profiles allocation, selection, shape construction, rectangle
 collection, polygon merging, temporary-buffer cleanup, layer copy/append, DB
@@ -179,6 +190,7 @@ fixed_dissection_lp_min_amount_fill
     [-lp_threads threads]
     [-candidate_threads threads]
     [-placement_threads threads]
+    [-verify_post_fill_density bool]
     [-lp_diagnostics prefix]
     [-svg file]
     [-density_report file]
@@ -209,6 +221,7 @@ fixed_dissection_lp_lip_fill
     [-lp_threads threads]
     [-candidate_threads threads]
     [-placement_threads threads]
+    [-verify_post_fill_density bool]
     [-lp_diagnostics prefix]
     [-svg file]
     [-density_report file]

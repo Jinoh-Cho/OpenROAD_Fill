@@ -33,6 +33,15 @@ accepted if the uncompressed file is absent. Missing inputs are recorded as
 `missing_input`; the remaining cases continue. The runner does not generate DEFs.
 Use `--dry-run` to inspect the selected inputs/settings without creating outputs.
 
+For saved OpenDB layouts, add `--input-format odb`. Expanded paths then use
+`<input-prefix><size>.odb` with no compressed DEF fallback. The worker calls
+`read_db` and skips LEF preloading, since ODB includes technology and libraries.
+TPU ODB-only runs do not require `--lefs`. For `1x1`, `--baseline-def` may point
+to either a DEF or ODB; a DEF baseline still requires the appropriate LEFs.
+Each method/repetition starts a fresh process and reloads the unfilled input.
+The historical `input_def` result field contains either layout path;
+`input_format` identifies `def` or `odb`.
+
 The runner reuses `gcd_six_method_comparison.tcl`, with these defaults:
 
 - Rules: `src/fin/test/fill.json`; window: 50 µm; resolution: 4.
@@ -57,7 +66,8 @@ Results:
 
 - `summary.csv` and `summary.json`: latest result for each case, updated after
   every case. `fill_seconds` measures the fill Tcl call. `load_seconds` measures
-  LEF/DEF loading. `before_analysis_seconds` and `analysis_seconds` measure
+  LEF+DEF loading in DEF mode, or ODB loading alone in ODB mode.
+  `before_analysis_seconds` and `analysis_seconds` measure
   pre-fill and post-fill density analysis separately.
 - `wall_seconds`: full process time, including startup, loading and enabled I/O.
 - `max_rss_kib`: GNU time maximum resident memory in KiB across the process
@@ -429,3 +439,18 @@ the sweep to two runs. `--repeats`, `--openroad`, `--output-dir` and `--resume`
 are supported. Missing tolerance evidence or changed binaries between conditions
 make cases unverified and cause a nonzero exit; an old binary is not accepted as
 proof of a tolerance comparison.
+
+
+### Incremental post-fill density and optional verification
+
+After rebuilding, LP fill updates densities using initial tile metal areas plus
+actual selected fill areas. To also run the geometry calculation and compare all
+tile/window areas, pass `--verify-post-fill-density`. The runner forwards
+`-verify_post_fill_density 1` to the Tcl fill command. This is independent of
+`--analysis`, which controls separate before/after analysis commands.
+
+`post_fill_validation_seconds` measures the optional geometry verification and
+is included in `post_fill_density_seconds`. Both are recorded in the runtime
+breakdown. Keep verification disabled for performance measurements; use it on
+small inputs to check correctness. Initial density and standalone analysis retain
+the geometry-based implementation.

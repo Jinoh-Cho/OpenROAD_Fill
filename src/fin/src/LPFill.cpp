@@ -14,6 +14,7 @@
 #include <iterator>
 #include <map>
 #include <numeric>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -221,7 +222,8 @@ double LPFill::fillLp(const char* rules_filename,
                       int lp_threads,
                       const char* lp_diagnostics,
                       int candidate_threads,
-                      int placement_threads)
+                      int placement_threads,
+                      bool verify_post_fill_density)
 {
   FillLpSolver selected_solver;
   if (lp_solver != nullptr && std::string(lp_solver) == "glop") {
@@ -244,6 +246,26 @@ double LPFill::fillLp(const char* rules_filename,
     throw std::invalid_argument("Placement thread count must be positive.");
   }
   const bool minimize_total_fill_area = method == FillMethod::MinFillAmount;
+  const bool write_svg = svg_filename != nullptr && svg_filename[0] != '\0';
+  bool serial_metal_collection = false;
+  if (const char* setting = std::getenv("FIN_SERIAL_METAL_COLLECTION")) {
+    const std::string value(setting);
+    if (value != "0" && value != "1") {
+      throw std::invalid_argument(
+          "FIN_SERIAL_METAL_COLLECTION must be 0 or 1.");
+    }
+    serial_metal_collection = value == "1";
+  }
+  int summary_threads = candidate_threads;
+  if (const char* setting = std::getenv("FIN_CANDIDATE_SUMMARY_THREADS")) {
+    const std::string value(setting);
+    size_t consumed = 0;
+    summary_threads = std::stoi(value, &consumed);
+    if (consumed != value.size() || summary_threads < 1) {
+      throw std::invalid_argument(
+          "FIN_CANDIDATE_SUMMARY_THREADS must be a positive integer.");
+    }
+  }
   int lip_type = 0;
   switch (method) {
     case FillMethod::MinVar:
@@ -297,26 +319,99 @@ double LPFill::fillLp(const char* rules_filename,
 
       lpfill::traceCandidate(std::string("layer=") + layer->getConstName()
                              + " collect_non_fill begin");
-      const Polygon90Set layer_shapes = orNonFills(block, layer);
+      std::map<std::string, double> initial_phases;
+      Polygon90Set bloated_non_fill;
+      std::vector<Rectangle> expanded_rectangles;
+      std::vector<Rectangle> original_rectangles;
+      const bool prepare_spacing = config.non_opc.space_to_non_fill >= 0;
+      bool spacing_fused = false;
+      const auto collect_start = Clock::now();
+      int collect_threads = 1;
+      const Polygon90Set layer_shapes
+          = orNonFills(block,
+                       layer,
+                       &initial_phases,
+                       serial_metal_collection || graphics_
+                               || lpfill::candidateTraceEnabled()
+                           ? 1
+                           : candidate_threads,
+                       &collect_threads,
+                       nullptr,
+                       config.non_opc.space_to_non_fill,
+                       &spacing_fused,
+                       prepare_spacing ? &expanded_rectangles : nullptr,
+                       &original_rectangles);
+      initial_phases["initial_collect_total_seconds"]
+          = seconds(collect_start, Clock::now());
+      std::cout << "[Fill LP] metal collection layer=" << layer->getConstName()
+                << " metal_collect_threads=" << collect_threads
+                << " spacing_fused=" << static_cast<int>(spacing_fused)
+                << std::endl;
+      const auto log_initial_phases = [&](const auto& phases) {
+        for (const auto& [name, value] : phases) {
+          std::cout << "[Fill LP] initial phase layer=" << layer->getConstName()
+                    << " name=" << name << " seconds=" << value << std::endl;
+        }
+      };
+      log_initial_phases(initial_phases);
       lpfill::traceCandidate("collect_non_fill end; initial_density begin");
-      grid.calculateMetalDensities(layer_shapes);
+      std::map<std::string, double> initial_density_raw_phases;
+      const auto density_start = Clock::now();
+      const int density_threads = grid.calculateMetalDensitiesFromRectangles(
+          original_rectangles,
+          graphics_ || lpfill::candidateTraceEnabled() ? 1 : candidate_threads,
+          &initial_density_raw_phases);
+      const auto density_input_cleanup = Clock::now();
+      std::vector<Rectangle>{}.swap(original_rectangles);
+      initial_density_raw_phases["post_fill_input_cleanup_seconds"]
+          = seconds(density_input_cleanup, Clock::now());
+      const double initial_density_seconds
+          = seconds(density_start, Clock::now());
+      std::cout << "[Fill LP] initial density layer=" << layer->getConstName()
+                << " initial_density_threads=" << density_threads
+                << " initial_density_mode=tile" << std::endl;
+      std::map<std::string, double> initial_density_phases;
+      for (const auto& [name, value] : initial_density_raw_phases) {
+        initial_density_phases["initial_"
+                               + name.substr(std::string("post_fill_").size())]
+            = value;
+      }
+      initial_density_phases["initial_density_total_seconds"]
+          = initial_density_seconds;
+      log_initial_phases(initial_density_phases);
       lpfill::traceCandidate("initial_density end; candidates begin");
       const auto candidates_start = Clock::now();
       lpfill::traceCandidate("bloat_non_fill begin");
-      const auto bloat_start = Clock::now();
-      const Polygon90Set bloated_non_fill
-          = layer_shapes + config.non_opc.space_to_non_fill;
-      const double bloat_seconds = seconds(bloat_start, Clock::now());
+      double bloat_seconds = 0.0;
+      if (!prepare_spacing) {
+        // Negative resizing is erosion, which does not distribute over union.
+        const auto bloat_start = Clock::now();
+        bloated_non_fill = layer_shapes + config.non_opc.space_to_non_fill;
+        bloat_seconds = seconds(bloat_start, Clock::now());
+      }
       lpfill::traceCandidate("bloat_non_fill end");
-      auto layer_fill_areas = lpfill::makeLayerFillAreas(grid,
-                                                         bloated_non_fill,
-                                                         layer,
-                                                         config.non_opc,
-                                                         graphics_.get(),
-                                                         candidate_threads);
+      auto layer_fill_areas
+          = prepare_spacing
+                ? lpfill::makeLayerFillAreasFromRectangles(grid,
+                                                           expanded_rectangles,
+                                                           layer,
+                                                           config.non_opc,
+                                                           graphics_.get(),
+                                                           candidate_threads)
+                : lpfill::makeLayerFillAreas(grid,
+                                             bloated_non_fill,
+                                             layer,
+                                             config.non_opc,
+                                             graphics_.get(),
+                                             candidate_threads);
+      const auto input_cleanup_start = Clock::now();
+      std::vector<Rectangle>{}.swap(expanded_rectangles);
+      layer_fill_areas.phase_seconds["candidate_tile_input_cleanup_seconds"]
+          = seconds(input_cleanup_start, Clock::now());
       std::cout << "[Fill LP] candidate preparation layer="
                 << layer->getConstName()
                 << " candidate_prepare_threads=" << layer_fill_areas.threads
+                << " free_area_mode=" << (prepare_spacing ? "tile" : "global")
                 << std::endl;
       auto candidate_phases = std::move(layer_fill_areas.phase_seconds);
       candidate_phases["candidate_bloat_seconds"] = bloat_seconds;
@@ -326,7 +421,6 @@ double LPFill::fillLp(const char* rules_filename,
       std::vector<std::vector<Rectangle>> tile_candidates;
       std::vector<Polygon90> fillable_polygons;
       std::vector<double> fillable_region_areas;
-      fillable_region_areas.reserve(grid.tiles().size());
       std::vector<double> target_tile_densities;
       std::vector<TileViolation> tile_violations;
       std::vector<WindowViolation> window_violations;
@@ -373,8 +467,6 @@ double LPFill::fillLp(const char* rules_filename,
         problem.min_window_density = min_window_density;
         problem.feature_areas = grid.metalAreas();
         problem.windows = grid.windowTileIndices();
-        problem.tile_areas.reserve(grid.tiles().size());
-        problem.max_fill_areas.reserve(grid.tiles().size());
         auto generated
             = lpfill::makeLayerFillCandidates(layer_fill_areas.tile_areas,
                                               layer,
@@ -386,45 +478,17 @@ double LPFill::fillLp(const char* rules_filename,
         actual_candidate_threads = generated.threads;
         tile_candidates = std::move(generated.tiles);
         const auto summary_start = Clock::now();
-        for (size_t tile_index = 0; tile_index < grid.tiles().size();
-             ++tile_index) {
-          const Rect& tile = grid.tiles()[tile_index];
-          const auto tile_start = Clock::now();
-          if (lpfill::candidateTraceEnabled()) {
-            lpfill::traceCandidate(
-                std::string("tile summary begin layer=") + layer->getConstName()
-                + " index=" + std::to_string(tile_index)
-                + " total=" + std::to_string(grid.tiles().size())
-                + " bounds_dbu=(" + std::to_string(tile.xMin()) + ","
-                + std::to_string(tile.yMin()) + ")-("
-                + std::to_string(tile.xMax()) + ","
-                + std::to_string(tile.yMax()) + ")");
-          }
-          Polygon90Set tile_fillable_area
-              = std::move(layer_fill_areas.tile_areas[tile_index]);
-          const auto& candidates = tile_candidates[tile_index];
-          std::vector<Polygon90> tile_fillable_polygons;
-          tile_fillable_area.get(tile_fillable_polygons);
-          fillable_polygons.insert(fillable_polygons.end(),
-                                   tile_fillable_polygons.begin(),
-                                   tile_fillable_polygons.end());
-          fillable_region_areas.push_back(
-              boost::polygon::area(tile_fillable_area));
-          double capacity = 0.0;
-          for (const Rectangle& candidate : candidates) {
-            capacity += static_cast<double>(xh(candidate) - xl(candidate))
-                        * (yh(candidate) - yl(candidate));
-          }
-          problem.tile_areas.push_back(tile.area());
-          problem.max_fill_areas.push_back(capacity);
-          if (lpfill::candidateTraceEnabled()) {
-            lpfill::traceCandidate(
-                "tile summary end index=" + std::to_string(tile_index)
-                + " candidates=" + std::to_string(candidates.size())
-                + " elapsed_seconds="
-                + std::to_string(seconds(tile_start, Clock::now())));
-          }
-        }
+        auto summary
+            = lpfill::summarizeLayerFillCandidates(grid.tiles(),
+                                                   layer_fill_areas.tile_areas,
+                                                   tile_candidates,
+                                                   write_svg,
+                                                   graphics_.get(),
+                                                   summary_threads);
+        problem.tile_areas = std::move(summary.tile_areas);
+        problem.max_fill_areas = std::move(summary.max_fill_areas);
+        fillable_polygons = std::move(summary.fillable_polygons);
+        fillable_region_areas = std::move(summary.fillable_region_areas);
         const auto candidates_end = Clock::now();
         candidate_phases["candidate_summary_seconds"]
             = seconds(summary_start, candidates_end);
@@ -437,6 +501,10 @@ double LPFill::fillLp(const char* rules_filename,
         candidate_phases["candidate_other_seconds"] = std::max(
             0.0,
             seconds(candidates_start, candidates_end) - candidate_accounted);
+        std::cout << "[Fill LP] candidate summary layer="
+                  << layer->getConstName()
+                  << " candidate_summary_threads=" << summary.threads
+                  << std::endl;
         for (const auto& [name, value] : candidate_phases) {
           std::cout << "[Fill LP] candidate phase layer="
                     << layer->getConstName() << " name=" << name
@@ -660,47 +728,22 @@ double LPFill::fillLp(const char* rules_filename,
                   << std::endl;
         tracePlacement("select_candidates end");
 
-        // for (size_t tile_index = 0; tile_index < grid.tiles().size();
-        //      tile_index++) {
-        //   const double placed_density
-        //       = (problem.feature_areas[tile_index] +
-        //       placed_areas[tile_index])
-        //         / problem.tile_areas[tile_index];
-        // if (placed_density < min_tile_density) {
-        //   const Rect& tile = grid.tiles()[tile_index];
-        //   tile_violations.push_back({tile_index,
-        //                              TileViolationReason::kDiscreteCandidate,
-        //                              min_tile_density,
-        //                              placed_density});
-        //   logger_->error(
-        //       FIN,
-        //       52,
-        //       "Fixed-dissection LP fill is infeasible on layer {}: tile {} "
-        //       "({}, {})-({}, {}) reaches density {:.6f}, below requested "
-        //       "minimum density {:.6f} with the available fill candidates.",
-        //       layer->getConstName(),
-        //       tile_index,
-        //       tile.xMin(),
-        //       tile.yMin(),
-        //       tile.xMax(),
-        //       tile.yMax(),
-        //       placed_density,
-        //       min_tile_density);
-        // }
-        // }
-
         const int mask_count = std::max(config.num_masks, 1);
         int mask_index = 0;
         tracePlacement("copy_layer_shapes begin");
-        const auto copy_start = Clock::now();
-        Polygon90Set post_fill_shapes = layer_shapes;
-        const double placement_copy_seconds = seconds(copy_start, Clock::now());
+        Polygon90Set post_fill_shapes;
+        double placement_copy_seconds = 0.0;
+        double placement_union_seconds = 0.0;
         Polygon90Set selected_fill_shapes
             = std::move(prepared_placement.selected_shapes);
-        const auto union_start = Clock::now();
-        post_fill_shapes += selected_fill_shapes;
-        const double placement_union_seconds
-            = seconds(union_start, Clock::now());
+        if (verify_post_fill_density) {
+          const auto copy_start = Clock::now();
+          post_fill_shapes = layer_shapes;
+          placement_copy_seconds = seconds(copy_start, Clock::now());
+          const auto union_start = Clock::now();
+          post_fill_shapes += selected_fill_shapes;
+          placement_union_seconds = seconds(union_start, Clock::now());
+        }
         tracePlacement("copy_layer_shapes end; insert_fills begin");
         const auto db_insert_start = Clock::now();
         size_t fill_index = 0;
@@ -731,7 +774,50 @@ double LPFill::fillLp(const char* rules_filename,
 
         std::map<std::string, double> density_phases;
         const auto post_fill_density_start = Clock::now();
-        grid.calculateMetalDensities(post_fill_shapes, &density_phases);
+        grid.addDisjointFillAreas(placed_areas, &density_phases);
+        density_phases["post_fill_validation_seconds"] = 0.0;
+        if (verify_post_fill_density) {
+          const auto validation_start = Clock::now();
+          TileGrid reference = grid;
+          reference.calculateMetalDensities(post_fill_shapes);
+          double max_area_error = 0.0;
+          const auto compare_area = [&max_area_error](double incremental,
+                                                      double geometric) {
+            if (!std::isfinite(incremental) || !std::isfinite(geometric)) {
+              throw std::runtime_error(
+                  "Post-fill density verification encountered a nonfinite "
+                  "area.");
+            }
+            max_area_error
+                = std::max(max_area_error, std::abs(incremental - geometric));
+          };
+          for (size_t i = 0; i < grid.tiles().size(); ++i) {
+            compare_area(grid.metalAreas()[i], reference.metalAreas()[i]);
+          }
+          for (size_t i = 0; i < grid.windows().size(); ++i) {
+            compare_area(grid.windows()[i].metal_area,
+                         reference.windows()[i].metal_area);
+          }
+          // Areas are integer DBU^2 in the supported layout sizes. Half a
+          // DBU^2 allows roundoff while detecting a one-DBU^2 discrepancy.
+          if (!std::isfinite(max_area_error) || max_area_error > 0.5) {
+            throw std::runtime_error(
+                "Post-fill density verification failed on layer "
+                + std::string(layer->getConstName())
+                + ": max tile/window area error="
+                + std::to_string(max_area_error) + " DBU^2");
+          }
+          density_phases["post_fill_validation_seconds"]
+              = seconds(validation_start, Clock::now());
+          std::cout << "[Fill LP] post-fill density verification layer="
+                    << layer->getConstName()
+                    << " max_area_error_dbu2=" << max_area_error
+                    << " status=passed" << std::endl;
+        }
+        std::cout << "[Fill LP] post-fill density layer="
+                  << layer->getConstName()
+                  << " mode=incremental verify=" << verify_post_fill_density
+                  << std::endl;
         const double post_fill_density_seconds
             = seconds(post_fill_density_start, Clock::now());
         tracePlacement("calculate_metal_densities end");
@@ -922,7 +1008,7 @@ double LPFill::fillLp(const char* rules_filename,
             = min_violation_tile_count;
         density_reports.back().max_violation_tile_count
             = max_violation_tile_count;
-        if (svg_filename != nullptr && svg_filename[0] != '\0') {
+        if (write_svg) {
           compute_seconds += seconds(compute_slice_start, Clock::now());
           const auto svg_start = Clock::now();
           const std::string layer_svg
@@ -1033,7 +1119,7 @@ double LPFill::fillLp(const char* rules_filename,
         density_reports.back().candidate_prepare_threads
             = layer_fill_areas.threads;
         density_reports.back().candidate_phase_seconds = candidate_phases;
-        if (svg_filename != nullptr && svg_filename[0] != '\0') {
+        if (write_svg) {
           compute_seconds += seconds(compute_slice_start, Clock::now());
           const auto svg_start = Clock::now();
           const std::string layer_svg

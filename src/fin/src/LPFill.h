@@ -58,7 +58,8 @@ class LPFill
                 int lp_threads = 1,
                 const char* lp_diagnostics = "",
                 int candidate_threads = 1,
-                int placement_threads = 1);
+                int placement_threads = 1,
+                bool verify_post_fill_density = false);
 
  private:
   odb::dbDatabase* db_;

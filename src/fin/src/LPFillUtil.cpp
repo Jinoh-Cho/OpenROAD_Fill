@@ -152,6 +152,45 @@ LayerFillAreas partitionFreeRectangles(const TileGrid& grid,
   return result;
 }
 
+void finishLayerFillAreas(const TileGrid& grid,
+                          dbTechLayer* layer,
+                          const FillShapesConfig& config,
+                          Graphics* graphics,
+                          int threads,
+                          LayerFillAreas& result)
+{
+  using Clock = std::chrono::steady_clock;
+  auto phase_start = Clock::now();
+  const auto finish_phase = [&](const char* name) {
+    const auto end = Clock::now();
+    result.phase_seconds[name]
+        = std::chrono::duration<double>(end - phase_start).count();
+    phase_start = end;
+  };
+  const auto [space_x, space_y] = getSpacing(layer, config);
+  const bool serial = graphics != nullptr || candidateTraceEnabled();
+  const auto apply_spacing = [&](size_t index) {
+    if (candidateTraceEnabled()) {
+      traceCandidate("prepare_tile begin index=" + std::to_string(index));
+    }
+    const Rect& tile = grid.tiles()[index];
+    Polygon90Set inset_tile;
+    inset_tile.insert(
+        Rectangle(tile.xMin(), tile.yMin(), tile.xMax(), tile.yMax()));
+    shrink(inset_tile, space_x, space_x, space_y, space_y);
+    result.tile_areas[index] = result.tile_areas[index] & inset_tile;
+  };
+  result.threads
+      = runTileTasks(grid.tiles().size(), threads, serial, apply_spacing);
+  finish_phase("candidate_tile_spacing_seconds");
+  const auto prune_tile = [&](size_t index) {
+    prune(result.tile_areas[index], layer, config, graphics);
+    traceCandidate("prepare_tile end");
+  };
+  runTileTasks(grid.tiles().size(), threads, serial, prune_tile);
+  finish_phase("candidate_tile_prune_seconds");
+}
+
 }  // namespace
 
 LayerFillAreas makeLayerFillAreas(const TileGrid& grid,
@@ -191,29 +230,53 @@ LayerFillAreas makeLayerFillAreas(const TileGrid& grid,
   finish_phase("candidate_tile_partition_seconds");
   traceCandidate("layer_free_area.partition end");
 
-  const auto [space_x, space_y] = getSpacing(layer, config);
-  const bool serial = graphics != nullptr || candidateTraceEnabled();
-  const auto apply_spacing = [&](size_t index) {
-    if (candidateTraceEnabled()) {
-      traceCandidate("prepare_tile begin index=" + std::to_string(index));
-    }
-    const Rect& tile = grid.tiles()[index];
-    Polygon90Set inset_tile;
-    inset_tile.insert(
-        Rectangle(tile.xMin(), tile.yMin(), tile.xMax(), tile.yMax()));
-    shrink(inset_tile, space_x, space_x, space_y, space_y);
-    result.tile_areas[index] = result.tile_areas[index] & inset_tile;
-  };
-  result.threads
-      = runTileTasks(grid.tiles().size(), threads, serial, apply_spacing);
-  finish_phase("candidate_tile_spacing_seconds");
-  const auto prune_tile = [&](size_t index) {
-    prune(result.tile_areas[index], layer, config, graphics);
-    traceCandidate("prepare_tile end");
-  };
-  runTileTasks(grid.tiles().size(), threads, serial, prune_tile);
-  finish_phase("candidate_tile_prune_seconds");
   result.phase_seconds = std::move(phases);
+  finishLayerFillAreas(grid, layer, config, graphics, threads, result);
+  return result;
+}
+
+LayerFillAreas makeLayerFillAreasFromRectangles(
+    const TileGrid& grid,
+    const std::vector<Rectangle>& expanded_rectangles,
+    dbTechLayer* layer,
+    const FillShapesConfig& config,
+    Graphics* graphics,
+    int threads)
+{
+  if (threads < 1) {
+    throw std::invalid_argument(
+        "Candidate preparation thread count must be positive.");
+  }
+  using Clock = std::chrono::steady_clock;
+  const auto start = Clock::now();
+  const auto& tiles = grid.tiles();
+  LayerFillAreas result;
+  result.tile_areas.resize(tiles.size());
+  result.bloated_non_fill_areas.resize(tiles.size());
+  if (tiles.empty()) {
+    return result;
+  }
+  result.tile_areas = grid.partitionRectangles(expanded_rectangles);
+  const auto partition_end = Clock::now();
+  result.phase_seconds["candidate_tile_partition_seconds"]
+      = std::chrono::duration<double>(partition_end - start).count();
+  const auto subtract = [&](size_t index) {
+    const auto& tile = tiles[index];
+    Polygon90Set free;
+    free.insert(Rectangle(tile.xMin(), tile.yMin(), tile.xMax(), tile.yMax()));
+    free -= result.tile_areas[index];
+    result.bloated_non_fill_areas[index]
+        = static_cast<double>(tile.area()) - boost::polygon::area(free);
+    result.tile_areas[index] = free;
+  };
+  runTileTasks(tiles.size(),
+               threads,
+               graphics != nullptr || candidateTraceEnabled(),
+               subtract);
+  result.phase_seconds["candidate_free_subtract_seconds"]
+      = std::chrono::duration<double>(Clock::now() - partition_end).count();
+  result.phase_seconds["candidate_free_decompose_seconds"] = 0.0;
+  finishLayerFillAreas(grid, layer, config, graphics, threads, result);
   return result;
 }
 
@@ -270,6 +333,72 @@ LayerFillCandidates makeLayerFillCandidates(
       = std::chrono::duration<double>(Clock::now() - start).count();
   result.work_seconds
       = std::accumulate(tile_seconds.begin(), tile_seconds.end(), 0.0);
+  return result;
+}
+
+LayerCandidateSummary summarizeLayerFillCandidates(
+    const std::vector<Rect>& tiles,
+    std::vector<Polygon90Set>& tile_areas,
+    const std::vector<std::vector<Rectangle>>& candidates,
+    bool write_svg,
+    Graphics* graphics,
+    int threads)
+{
+  if (tiles.size() != tile_areas.size() || tiles.size() != candidates.size()) {
+    throw std::invalid_argument("Candidate summary tile counts must match.");
+  }
+  LayerCandidateSummary result;
+  result.tile_areas.resize(tiles.size());
+  result.max_fill_areas.resize(tiles.size());
+  std::vector<std::vector<Polygon90>> polygons;
+  if (write_svg) {
+    polygons.resize(tiles.size());
+    result.fillable_region_areas.resize(tiles.size());
+  }
+  const bool trace = candidateTraceEnabled();
+  const auto summarize = [&](size_t index) {
+    const auto start = std::chrono::steady_clock::now();
+    if (trace) {
+      traceCandidate("tile summary begin index=" + std::to_string(index));
+    }
+    // Boost polygon sets copy even with std::move; read the owned slot
+    // directly.
+    auto& region = tile_areas[index];
+    if (write_svg) {
+      region.get(polygons[index]);
+      result.fillable_region_areas[index] = boost::polygon::area(region);
+    }
+    double capacity = 0.0;
+    for (const Rectangle& candidate : candidates[index]) {
+      capacity += static_cast<double>(xh(candidate) - xl(candidate))
+                  * (yh(candidate) - yl(candidate));
+    }
+    result.tile_areas[index] = tiles[index].area();
+    result.max_fill_areas[index] = capacity;
+    if (trace) {
+      traceCandidate(
+          "tile summary end index=" + std::to_string(index) + " candidates="
+          + std::to_string(candidates[index].size()) + " elapsed_seconds="
+          + std::to_string(std::chrono::duration<double>(
+                               std::chrono::steady_clock::now() - start)
+                               .count()));
+    }
+  };
+  result.threads = runTileTasks(
+      tiles.size(), threads, graphics != nullptr || trace, summarize);
+  tile_areas.clear();
+  if (write_svg) {
+    size_t count = 0;
+    for (const auto& tile_polygons : polygons) {
+      count += tile_polygons.size();
+    }
+    result.fillable_polygons.reserve(count);
+    for (auto& tile_polygons : polygons) {
+      for (auto& polygon : tile_polygons) {
+        result.fillable_polygons.push_back(std::move(polygon));
+      }
+    }
+  }
   return result;
 }
 
@@ -385,6 +514,18 @@ void prune(Polygon90Set& fill_area,
   traceCandidate("prune.subtract end");
 }
 
+namespace {
+void accumulateSpacingArea(Polygon90Set& all_shape_fills,
+                           const Polygon90Set& fills,
+                           int space_x,
+                           int space_y)
+{
+  Polygon90Set bloated_fills(fills);
+  all_shape_fills += bloat(bloated_fills, space_x, space_x, space_y, space_y);
+}
+}  // namespace
+
+// The remaining-area update is only needed when another fill size follows.
 std::vector<Rectangle> makeFillCandidates(const Polygon90& area,
                                           dbTechLayer* layer,
                                           const FillShapesConfig& config,
@@ -398,6 +539,7 @@ std::vector<Rectangle> makeFillCandidates(const Polygon90& area,
   auto iter = config.shapes.begin();
   while (iter != config.shapes.end()) {
     auto [width, height] = *iter++;
+    const bool has_next_size = iter != config.shapes.end();
     if ((is_horiz && width < height) || (!is_horiz && height < width)) {
       std::swap(width, height);
     }
@@ -464,9 +606,9 @@ std::vector<Rectangle> makeFillCandidates(const Polygon90& area,
            height - 1,
            height);
       traceCandidate("subpolygon.keep end; subpolygon.bloat_accumulate begin");
-      Polygon90Set bloated_fills(fills);
-      all_shape_fills
-          += bloat(bloated_fills, space_x, space_x, space_y, space_y);
+      if (has_next_size) {
+        accumulateSpacingArea(all_shape_fills, fills, space_x, space_y);
+      }
       traceCandidate(
           "subpolygon.bloat_accumulate end; subpolygon.get_rectangles begin");
 
@@ -477,7 +619,9 @@ std::vector<Rectangle> makeFillCandidates(const Polygon90& area,
       traceCandidate("subpolygon.append end; subpolygon end");
     }
     traceCandidate("shape.subtract_used begin");
-    fill_area -= all_shape_fills;
+    if (has_next_size) {
+      fill_area -= all_shape_fills;
+    }
     traceCandidate("shape.subtract_used end; shape end");
   }
   return candidates;
