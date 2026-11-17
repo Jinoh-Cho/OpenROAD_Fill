@@ -197,7 +197,22 @@ void writeLPFillDensityReport(
                << "\""
                << ", \"tile_violation_count\": " << entry.tile_violation_count
                << ", \"window_violation_count\": "
-               << entry.window_violation_count << ", \"failure\": ";
+               << entry.window_violation_count
+               << ", \"relaxed_window_minimum_count\": "
+               << entry.relaxed_window_minimums.size()
+               << ", \"relaxed_window_minimums\": [";
+        for (size_t w = 0; w < entry.relaxed_window_minimums.size(); ++w) {
+          const auto& bound = entry.relaxed_window_minimums[w];
+          report << (w == 0 ? "" : ", ")
+                 << "{\"window_index\": " << bound.window_index
+                 << ", \"requested_density\": " << bound.requested_density
+                 << ", \"effective_density\": " << bound.effective_density
+                 << ", \"requested_fill_area_dbu2\": "
+                 << bound.requested_fill_area
+                 << ", \"effective_fill_area_dbu2\": "
+                 << bound.effective_fill_area << '}';
+        }
+        report << "], \"failure\": ";
         if (entry.solved) {
           report << "null";
         } else {

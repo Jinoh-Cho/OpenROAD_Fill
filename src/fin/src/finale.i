@@ -67,7 +67,8 @@ fin::Finale* getFinale()
                                       const char* density_report_filename,
                                       const char* lp_solver = "glop",
                                       int lp_threads = 1,
-                                      const char* lp_diagnostics = "", int candidate_threads = 1, int placement_threads = 1, bool verify_post_fill_density = false)
+                                      const char* lp_diagnostics = "", int candidate_threads = 1, int placement_threads = 1, bool verify_post_fill_density = false,
+                                     const char* selection_policy = "greedy")
   {
     return getFinale()->fixedDissectionLpMinVarFill(rules_filename,
                                          region,
@@ -82,7 +83,7 @@ fin::Finale* getFinale()
                                          density_report_filename,
                                          lp_solver,
                                          lp_threads,
-                                         lp_diagnostics, candidate_threads, placement_threads, verify_post_fill_density);
+                                         lp_diagnostics, candidate_threads, placement_threads, verify_post_fill_density, selection_policy);
   }
 
   double fixed_dissection_lp_min_amount_fill_cmd(
@@ -99,7 +100,8 @@ fin::Finale* getFinale()
       const char* density_report_filename,
       const char* lp_solver = "glop",
       int lp_threads = 1,
-      const char* lp_diagnostics = "", int candidate_threads = 1, int placement_threads = 1, bool verify_post_fill_density = false)
+      const char* lp_diagnostics = "", int candidate_threads = 1, int placement_threads = 1, bool verify_post_fill_density = false,
+                                     const char* selection_policy = "greedy")
   {
     return getFinale()->fixedDissectionLpMinAmountFill(rules_filename,
                                                   region,
@@ -114,7 +116,7 @@ fin::Finale* getFinale()
                                                   density_report_filename,
                                                   lp_solver,
                                                   lp_threads,
-                                                  lp_diagnostics, candidate_threads, placement_threads, verify_post_fill_density);
+                                                  lp_diagnostics, candidate_threads, placement_threads, verify_post_fill_density, selection_policy);
   }
 
   double fixed_dissection_lp_lip_fill_cmd(const char* rules_filename,
@@ -131,7 +133,8 @@ fin::Finale* getFinale()
                                           const char* density_report_filename,
                                           const char* lp_solver = "glop",
                                           int lp_threads = 1,
-                                          const char* lp_diagnostics = "", int candidate_threads = 1, int placement_threads = 1, bool verify_post_fill_density = false)
+                                          const char* lp_diagnostics = "", int candidate_threads = 1, int placement_threads = 1, bool verify_post_fill_density = false,
+                                     const char* selection_policy = "greedy")
   {
     return getFinale()->fixedDissectionLpLipFill(rules_filename,
                                             region,
@@ -147,7 +150,7 @@ fin::Finale* getFinale()
                                             density_report_filename,
                                             lp_solver,
                                             lp_threads,
-                                            lp_diagnostics, candidate_threads, placement_threads, verify_post_fill_density);
+                                            lp_diagnostics, candidate_threads, placement_threads, verify_post_fill_density, selection_policy);
   }
 
 %} // inline

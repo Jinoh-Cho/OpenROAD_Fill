@@ -191,10 +191,7 @@ FixedDissectionLpResult solveLipLpFill(
     if (window_areas[index] <= 0.0) {
       throw std::invalid_argument("A density window must have positive area.");
     }
-    const double min_fill
-        = std::max(problem.min_window_density * window_areas[index]
-                       - window_feature_areas[index],
-                   0.0);
+    const double min_fill = problem.minimumWindowFillArea(index);
     const double max_fill = problem.maximumWindowFillArea(
         window_areas[index], window_feature_areas[index]);
     MPConstraint* lower = solver->MakeRowConstraint(

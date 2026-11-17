@@ -18,6 +18,11 @@ set lp_solver [comparison_option FIN_LP_SOLVER glop]
 set lp_threads [comparison_option FIN_LP_THREADS 1]
 set candidate_threads [comparison_option FIN_CANDIDATE_THREADS 1]
 set placement_threads [comparison_option FIN_PLACEMENT_THREADS 1]
+set selection_policy [comparison_option FIN_SELECTION_POLICY greedy]
+if {$selection_policy ni {greedy uniform}} {error "FIN_SELECTION_POLICY must be greedy or uniform"}
+if {$method eq "density" && $selection_policy ne "greedy"} {
+  error "Selection policy is available only for LP fill methods."
+}
 set resolution [comparison_option FIN_RESOLUTION 2]
 set window [comparison_option FIN_WINDOW 50]
 set min_tile [comparison_option FIN_MIN_TILE_DENSITY 0.20]
@@ -87,7 +92,7 @@ set fill_start [clock milliseconds]
 if {$method eq "density"} {
   density_fill -rules $rules
 } else {
-  set fill_options [list -lp_diagnostics "$output/lp_failure" -lp_solver $lp_solver -lp_threads $lp_threads -candidate_threads $candidate_threads -placement_threads $placement_threads -rules $rules -window $window -origin {0 0} \
+  set fill_options [list -lp_diagnostics "$output/lp_failure" -lp_solver $lp_solver -lp_threads $lp_threads -candidate_threads $candidate_threads -placement_threads $placement_threads -selection_policy $selection_policy -rules $rules -window $window -origin {0 0} \
     -resolution $resolution -min_tile_density $min_tile -max_tile_density $max_tile \
     -min_window_density $min_window -max_window_density $max_window]
   if {$write_reports} {lappend fill_options -density_report "$output/lp_fill_report.json"}
@@ -128,7 +133,7 @@ if {$run_analysis} {
   set added_area [expr {$after_area - $before_area}]
 }
 set report [open "$output/run_summary.json" w]
-puts $report "{\"method\": \"$method\", \"load_seconds\": $load_seconds, \"before_analysis_seconds\": $before_seconds, \"fill_seconds\": $fill_seconds, \"analysis_seconds\": $analysis_seconds, \"placed_fill_area_dbu2\": $placed_area, \"added_metal_area_dbu2\": $added_area, \"feature_count_seconds\": $feature_count_seconds, [string range $feature_counts 1 end-1]}"
+puts $report "{\"method\": \"$method\", \"selection_policy\": \"$selection_policy\", \"load_seconds\": $load_seconds, \"before_analysis_seconds\": $before_seconds, \"fill_seconds\": $fill_seconds, \"analysis_seconds\": $analysis_seconds, \"placed_fill_area_dbu2\": $placed_area, \"added_metal_area_dbu2\": $added_area, \"feature_count_seconds\": $feature_count_seconds, [string range $feature_counts 1 end-1]}"
 close $report
 puts "COMPARISON_RESULT: method=$method fill_seconds=$fill_seconds added_metal_area=$added_area DBU^2$feature_count_summary"
 puts "pass"

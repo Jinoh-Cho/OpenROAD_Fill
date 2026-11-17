@@ -143,11 +143,8 @@ static void fillPolygon(const Polygon90& area,
       // sweep on the origin of the tile set looking for maximum fill.
       // We could try that in the future.)
       Polygon90Set all_fills;
-      for (int x = xl(bounds); x < xh(bounds); x += w + space_x) {
-        for (int y = yl(bounds); y < yh(bounds); y += h + space_y) {
-          all_fills.insert(makeRect(x, y, x + w, y + h));
-        }
-      }
+      insertPatternRectangles(
+          all_fills, bounds, w, h, space_x, space_y, cfg.pattern);
 
       // Intersect fills with the sub area and keep only whole fill shapes
       Polygon90Set fills = all_fills & sub_fill_area;
@@ -197,7 +194,9 @@ void DensityFill::fillLayer(dbBlock* block,
                               fill_bounds_rect.xMax(),
                               fill_bounds_rect.yMax());
 
-  const FillLayerConfig& cfg = layers_[layer];
+  FillLayerConfig cfg = layers_[layer];
+  cfg.non_opc.pattern.origin = fill_bounds_rect.ll();
+  cfg.opc.pattern.origin = fill_bounds_rect.ll();
 
   std::vector<Polygon90> polygons;
 

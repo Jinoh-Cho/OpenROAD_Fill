@@ -63,7 +63,7 @@ TEST_P(UnattainableTileMinimumTest, OmitsOnlyUnattainableTileMinimums)
   }
 }
 
-TEST_P(UnattainableTileMinimumTest, RetainsWindowMinimums)
+TEST_P(UnattainableTileMinimumTest, CapsUnattainableWindowMinimums)
 {
   problem_.min_window_density = 0.15;
   const auto result = solve(problem_);
@@ -72,7 +72,11 @@ TEST_P(UnattainableTileMinimumTest, RetainsWindowMinimums)
   EXPECT_GE(result.fill_areas[1], 3.0 - 1e-6);
 
   problem_.max_fill_areas[1] = 1.0;
-  EXPECT_FALSE(solve(problem_).solved);
+  const auto limited = solve(problem_);
+  ASSERT_TRUE(limited.solved);
+  EXPECT_NEAR(limited.fill_areas[0], 0.0, 1e-6);
+  EXPECT_NEAR(limited.fill_areas[1], 1.0, 1e-6);
+  EXPECT_NEAR(limited.fill_areas[2], 1.0, 1e-6);
 }
 
 TEST_P(UnattainableTileMinimumTest, RetainsMaximumTileDensity)
@@ -86,7 +90,10 @@ TEST_P(UnattainableTileMinimumTest, RetainsMaximumTileDensity)
   EXPECT_LE(result.fill_areas[2], 1.0 + 1e-6);
 
   problem_.min_window_density = 0.1;
-  EXPECT_FALSE(solve(problem_).solved);
+  const auto limited = solve(problem_);
+  ASSERT_TRUE(limited.solved);
+  EXPECT_NEAR(limited.fill_areas[1], 1.0, 1e-6);
+  EXPECT_NEAR(limited.fill_areas[2], 1.0, 1e-6);
 }
 
 TEST_P(UnattainableTileMinimumTest, OmitsTileMaximumExceededByExistingMetal)
@@ -417,7 +424,36 @@ TEST_F(LpFailureDiagnosticsTest, DoesNotInventConflictingLocation)
   EXPECT_EQ(layer.get<std::string>("failure.bounds"), "null");
 }
 
-TEST(FixedDissectionLpTest, EnforcesMinimumWindowDensity)
+TEST_P(PdlpFillTest, FillsCapacityLimitedWindowsWithoutDroppingTheLowerBound)
+{
+  FixedDissectionLpProblem problem{
+      .max_window_density = 0.6,
+      .min_window_density = 0.3,
+      .tile_areas = {10.0, 10.0, 10.0},
+      .feature_areas = {1.0, 0.0, 0.0},
+      .max_fill_areas = {1.0, 0.0, 10.0},
+      .windows = {{0}, {1}, {2}},
+      .lp_solver = FillLpSolver::Pdlp,
+      .lp_threads = std::get<1>(GetParam()),
+  };
+  for (const auto backend : {FillLpSolver::Pdlp, FillLpSolver::Glop}) {
+    problem.lp_solver = backend;
+    problem.lp_threads
+        = backend == FillLpSolver::Glop ? 1 : std::get<1>(GetParam());
+    const auto result = solve(problem);
+    ASSERT_TRUE(result.solved);
+    ASSERT_EQ(result.fill_areas.size(), 3);
+    EXPECT_NEAR(result.fill_areas[0], 1.0, 1e-4);
+    EXPECT_NEAR(result.fill_areas[1], 0.0, 1e-4);
+    EXPECT_GE(result.fill_areas[2], 3.0 - 1e-4);
+    EXPECT_LE(result.fill_areas[2], 6.0 + 1e-4);
+    if (std::get<0>(GetParam()) == 1) {
+      EXPECT_NEAR(result.fill_areas[2], 3.0, 1e-4);
+    }
+  }
+}
+
+TEST(FixedDissectionLpTest, CapsMinimumWindowDensityAtLegalCapacity)
 {
   FixedDissectionLpProblem problem{
       .max_window_density = 0.5,
@@ -428,7 +464,13 @@ TEST(FixedDissectionLpTest, EnforcesMinimumWindowDensity)
       .windows = {{0}},
   };
 
-  EXPECT_FALSE(solveMinVarLP(problem).solved);
+  for (const auto& result : {solveMinVarLP(problem),
+                             solveMinFillAmountLp(problem),
+                             solveLipLpFill(problem, {{0}})}) {
+    ASSERT_TRUE(result.solved);
+    ASSERT_EQ(result.fill_areas.size(), 1);
+    EXPECT_NEAR(result.fill_areas[0], 3.0, 1e-6);
+  }
 }
 
 TEST(FixedDissectionLpTest, RejectsInvalidMinimumWindowDensity)

@@ -56,7 +56,8 @@ class Finale
                                      const char* lp_diagnostics = "",
                                      int candidate_threads = 1,
                                      int placement_threads = 1,
-                                     bool verify_post_fill_density = false);
+                                     bool verify_post_fill_density = false,
+                                     const char* selection_policy = "greedy");
   double fixedDissectionLpMinAmountFill(const char* rules_filename,
                                         const odb::Rect& region,
                                         const odb::Point& origin,
@@ -73,7 +74,9 @@ class Finale
                                         const char* lp_diagnostics = "",
                                         int candidate_threads = 1,
                                         int placement_threads = 1,
-                                        bool verify_post_fill_density = false);
+                                        bool verify_post_fill_density = false,
+                                        const char* selection_policy
+                                        = "greedy");
   double fixedDissectionLpLipFill(const char* rules_filename,
                                   const odb::Rect& region,
                                   const odb::Point& origin,
@@ -91,7 +94,8 @@ class Finale
                                   const char* lp_diagnostics = "",
                                   int candidate_threads = 1,
                                   int placement_threads = 1,
-                                  bool verify_post_fill_density = false);
+                                  bool verify_post_fill_density = false,
+                                  const char* selection_policy = "greedy");
 
  private:
   odb::dbDatabase* db_ = nullptr;

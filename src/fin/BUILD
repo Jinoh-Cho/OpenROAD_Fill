@@ -15,10 +15,14 @@ package(
 cc_library(
     name = "fin",
     srcs = [
+        "src/CandidateSelection.cpp",
+        "src/CandidateSelection.h",
         "src/DensityFill.cpp",
         "src/DensityFill.h",
         "src/FillConfig.cpp",
         "src/FillConfig.h",
+        "src/FillPattern.cpp",
+        "src/FillPattern.h",
         "src/FillGeometry.cpp",
         "src/FillGeometry.h",
         "src/FillLpSolver.cpp",

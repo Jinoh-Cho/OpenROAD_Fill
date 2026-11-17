@@ -405,7 +405,11 @@ LayerCandidateSummary summarizeLayerFillCandidates(
 LayerFillPlacement selectLayerFillCandidates(
     const std::vector<std::vector<Rectangle>>& candidates,
     const std::vector<double>& target_areas,
-    int threads)
+    int threads,
+    SelectionPolicy policy,
+    int space_x,
+    int space_y,
+    const FillPatternConfig& pattern)
 {
   if (candidates.size() != target_areas.size()) {
     throw std::invalid_argument("Each candidate tile must have a target area.");
@@ -420,15 +424,13 @@ LayerFillPlacement selectLayerFillCandidates(
   const bool trace = candidateTraceEnabled();
   const auto select = [&](size_t index) {
     const auto start = Clock::now();
-    for (const Rectangle& candidate : candidates[index]) {
-      const double candidate_area
-          = static_cast<double>(xh(candidate) - xl(candidate))
-            * (yh(candidate) - yl(candidate));
-      if (result.placed_areas[index] + candidate_area <= target_areas[index]) {
-        selected[index].push_back(candidate);
-        result.placed_areas[index] += candidate_area;
-      }
-    }
+    result.placed_areas[index] = selectTileCandidates(candidates[index],
+                                                      target_areas[index],
+                                                      policy,
+                                                      space_x,
+                                                      space_y,
+                                                      selected[index],
+                                                      pattern);
     tile_seconds[index]
         = std::chrono::duration<double>(Clock::now() - start).count();
     if (trace) {
@@ -589,11 +591,8 @@ std::vector<Rectangle> makeFillCandidates(const Polygon90& area,
       traceCandidate(
           "subpolygon.extents end; subpolygon.tile_rectangles begin");
       Polygon90Set tiled_fills;
-      for (int x = xl(bounds); x < xh(bounds); x += width + space_x) {
-        for (int y = yl(bounds); y < yh(bounds); y += height + space_y) {
-          tiled_fills.insert(makeRect(x, y, x + width, y + height));
-        }
-      }
+      insertPatternRectangles(
+          tiled_fills, bounds, width, height, space_x, space_y, config.pattern);
       traceCandidate(
           "subpolygon.tile_rectangles end; subpolygon.intersect begin");
       Polygon90Set fills = tiled_fills & sub_fill_area;

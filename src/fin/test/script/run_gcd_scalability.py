@@ -62,7 +62,7 @@ PLACEMENT_PHASE_FIELDS = (
     "post_fill_validation_seconds",
 )
 FIELDS = (
-    "size", "tiles", "method", "repeat", "status", "returncode",
+    "size", "tiles", "method", "selection_policy", "repeat", "status", "returncode",
     "load_seconds", "before_analysis_seconds", "fill_seconds", "analysis_seconds",
     "wall_seconds", "framework_total_seconds", "max_rss_kib", "user_seconds", "system_seconds",
     "placed_fill_area_dbu2", "added_metal_area_dbu2", "input_bytes",
@@ -132,6 +132,8 @@ def parse_args():
                         help="Extract and write fill SVG geometry (default: off)")
     parser.add_argument("--placement-threads", type=int, default=1,
                         help="LP candidate selection/geometry threads; DB insertion stays serial (default: 1)")
+    parser.add_argument("--selection-policy", choices=("greedy", "uniform"), default=None,
+                        help="Candidate selection: original area cap or spatially distributed selection")
     parser.add_argument("--resolution", type=int, default=4)
     parser.add_argument("--window", type=float, default=50)
     parser.add_argument("--min-tile-density", type=float, default=0.20)
@@ -149,6 +151,9 @@ def parse_args():
     parser.add_argument("--resume", action="store_true", help="Skip successful cases in --output-dir; retry other cases")
     parser.add_argument("--dry-run", action="store_true", help="Print planned cases without creating files")
     args = parser.parse_args()
+    if args.selection_policy is not None and "density" in args.methods:
+        parser.error("--selection-policy applies only to LP methods; exclude density from --methods")
+    args.selection_policy = args.selection_policy or "greedy"
     if args.resume and args.output_dir is None:
         parser.error("--resume requires --output-dir")
     if (min(args.threads, args.lp_threads, args.candidate_threads, args.placement_threads, args.resolution, args.repeats) < 1
@@ -199,6 +204,7 @@ def worker_env(args):
                                              if args.candidate_summary_threads is not None
                                              else args.candidate_threads),
         "FIN_PLACEMENT_THREADS": str(args.placement_threads),
+        "FIN_SELECTION_POLICY": args.selection_policy,
         "FIN_BENCHMARK": args.benchmark, "FIN_RULES": str(args.rules),
         "FIN_RESOLUTION": str(args.resolution), "FIN_WINDOW": str(args.window),
         "FIN_MIN_TILE_DENSITY": str(args.min_tile_density),

@@ -171,8 +171,7 @@ FixedDissectionLpResult solveFillLp(const FixedDissectionLpProblem& problem,
         = problem.maximumWindowFillArea(window_area, feature_area);
     MPConstraint* upper_bound = solver->MakeRowConstraint(
         -infinity, fill_budget / area_scale, "upper_" + std::to_string(index));
-    const double minimum_fill_area = std::max(
-        problem.min_window_density * window_area - feature_area, 0.0);
+    const double minimum_fill_area = problem.minimumWindowFillArea(index);
     MPConstraint* lower_bound
         = solver->MakeRowConstraint(minimum_fill_area / area_scale,
                                     infinity,

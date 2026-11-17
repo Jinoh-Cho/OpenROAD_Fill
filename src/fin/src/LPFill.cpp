@@ -223,8 +223,11 @@ double LPFill::fillLp(const char* rules_filename,
                       const char* lp_diagnostics,
                       int candidate_threads,
                       int placement_threads,
-                      bool verify_post_fill_density)
+                      bool verify_post_fill_density,
+                      const char* selection_policy)
 {
+  const auto policy
+      = lpfill::parseSelectionPolicy(selection_policy ? selection_policy : "");
   FillLpSolver selected_solver;
   if (lp_solver != nullptr && std::string(lp_solver) == "glop") {
     selected_solver = FillLpSolver::Glop;
@@ -307,7 +310,8 @@ double LPFill::fillLp(const char* rules_filename,
       if (config_it == layers.end()) {
         continue;
       }
-      const FillLayerConfig& config = config_it->second;
+      FillLayerConfig config = config_it->second;
+      config.non_opc.pattern.origin = origin;
       const auto layer_start = Clock::now();
       if (config.has_opc) {
         logger_->warn(FIN,
@@ -424,6 +428,7 @@ double LPFill::fillLp(const char* rules_filename,
       std::vector<double> target_tile_densities;
       std::vector<TileViolation> tile_violations;
       std::vector<WindowViolation> window_violations;
+      std::vector<WindowMinimumRelaxation> relaxed_window_minimums;
       const size_t layer_fill_start = created_fills.size();
       std::string infeasibility_reason;
       size_t diagnostic_window_index = 0;
@@ -575,8 +580,18 @@ double LPFill::fillLp(const char* rules_filename,
           }
           const double fill_budget
               = problem.maximumWindowFillArea(window_area, feature_area);
-          const double window_minimum_fill_area = std::max(
+          const double requested_window_fill_area = std::max(
               problem.min_window_density * window_area - feature_area, 0.0);
+          const double window_minimum_fill_area
+              = problem.minimumWindowFillArea(window_index);
+          if (window_minimum_fill_area < requested_window_fill_area) {
+            relaxed_window_minimums.push_back(
+                {window_index,
+                 min_window_density,
+                 (feature_area + window_minimum_fill_area) / window_area,
+                 requested_window_fill_area,
+                 window_minimum_fill_area});
+          }
           const double required_fill_area
               = std::max(tile_minimum_fill_area, window_minimum_fill_area);
           if (required_fill_area > fill_budget
@@ -597,6 +612,14 @@ double LPFill::fillLp(const char* rules_filename,
               diagnostic_fill_budget = fill_budget;
             }
           }
+        }
+        if (!relaxed_window_minimums.empty()) {
+          std::cout << "[Fill LP] capacity-limited window minimums layer="
+                    << layer->getConstName()
+                    << " relaxed_windows=" << relaxed_window_minimums.size()
+                    << " requested_min_window_density=" << min_window_density
+                    << "; requiring available candidate capacity instead."
+                    << std::endl;
         }
         if (omitted_tile_maximums != 0 || omitted_window_maximums != 0) {
           logger_->warn(FIN,
@@ -711,10 +734,18 @@ double LPFill::fillLp(const char* rules_filename,
           }
         };
         tracePlacement("select_candidates begin");
+        const auto [selection_space_x, selection_space_y]
+            = lpfill::getSpacing(layer, config.non_opc);
+        std::cout << "[Fill LP] selection policy=" << selection_policy
+                  << std::endl;
         auto prepared_placement = lpfill::selectLayerFillCandidates(
             tile_candidates,
             result.fill_areas,
-            graphics_ ? 1 : placement_threads);
+            graphics_ ? 1 : placement_threads,
+            policy,
+            selection_space_x,
+            selection_space_y,
+            config.non_opc.pattern);
         const auto& placed_areas = prepared_placement.placed_areas;
         const auto& selected_fills = prepared_placement.fills;
         std::cout << "[Fill LP] placement select layer="
@@ -986,6 +1017,8 @@ double LPFill::fillLp(const char* rules_filename,
         density_reports.back().candidate_prepare_threads
             = layer_fill_areas.threads;
         density_reports.back().candidate_phase_seconds = candidate_phases;
+        density_reports.back().relaxed_window_minimums
+            = relaxed_window_minimums;
         density_reports.back().placement_prepare_seconds
             = prepared_placement.wall_seconds;
         density_reports.back().placement_prepare_work_seconds
@@ -1119,6 +1152,8 @@ double LPFill::fillLp(const char* rules_filename,
         density_reports.back().candidate_prepare_threads
             = layer_fill_areas.threads;
         density_reports.back().candidate_phase_seconds = candidate_phases;
+        density_reports.back().relaxed_window_minimums
+            = relaxed_window_minimums;
         if (write_svg) {
           compute_seconds += seconds(compute_slice_start, Clock::now());
           const auto svg_start = Clock::now();

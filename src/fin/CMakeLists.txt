@@ -14,10 +14,12 @@ swig_lib(NAME      fin
 
 target_sources(fin
   PRIVATE
+    src/CandidateSelection.cpp
     src/Finale.cpp
     src/MakeFinale.cpp
     src/DensityFill.cpp
     src/FillConfig.cpp
+    src/FillPattern.cpp
     src/FillGeometry.cpp
     src/FillLpSolver.cpp
     src/LpDiagnostics.cpp

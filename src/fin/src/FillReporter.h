@@ -29,6 +29,15 @@ struct TileDensityReport
   double svg_seconds;
 };
 
+struct WindowMinimumRelaxation
+{
+  size_t window_index;
+  double requested_density;
+  double effective_density;
+  double requested_fill_area;
+  double effective_fill_area;
+};
+
 struct LPFillDensityReport
 {
   std::string name;
@@ -80,6 +89,7 @@ struct LPFillDensityReport
   double max_post_fill_tile_density = 0.0;
   size_t min_violation_tile_count = 0;
   size_t max_violation_tile_count = 0;
+  std::vector<WindowMinimumRelaxation> relaxed_window_minimums{};
 };
 
 void writeFloatingDensityProfile(const std::string& profile_filename,

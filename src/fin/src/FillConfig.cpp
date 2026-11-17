@@ -4,7 +4,9 @@
 #include "FillConfig.h"
 
 #include <algorithm>
+#include <cmath>
 #include <iterator>
+#include <stdexcept>
 
 #include "boost/lexical_cast.hpp"
 #include "boost/property_tree/json_parser.hpp"
@@ -26,12 +28,37 @@ double getValue(const char* key, const pt::ptree& tree)
   return getValue(tree.get_child(key));
 }
 
+FillPatternConfig readPattern(const pt::ptree& tree)
+{
+  FillPatternConfig config;
+  const auto pattern = tree.get<std::string>("pattern", "grid");
+  const auto offset = tree.get_optional<double>("stagger_offset");
+  if (pattern != "grid" && pattern != "stagger") {
+    throw std::invalid_argument("Fill pattern must be grid or stagger.");
+  }
+  if (pattern == "grid") {
+    if (tree.find("stagger_offset") != tree.not_found()) {
+      throw std::invalid_argument("stagger_offset requires pattern=stagger.");
+    }
+    return config;
+  }
+  if (!offset || !std::isfinite(*offset) || *offset < 0 || *offset >= 1) {
+    throw std::invalid_argument(
+        "pattern=stagger requires stagger_offset in [0, 1) (fraction of x "
+        "pitch).");
+  }
+  config.type = FillPattern::Stagger;
+  config.stagger_offset = *offset;
+  return config;
+}
+
 FillLayerConfig readLayerConfig(const pt::ptree& layer, int dbu)
 {
   FillLayerConfig config;
   config.space_to_outline = getValue("space_to_outline", layer) * dbu;
   const auto& non_opc = layer.get_child("non-opc");
   auto& non_opc_config = config.non_opc;
+  non_opc_config.pattern = readPattern(non_opc);
   non_opc_config.space_to_fill = getValue("space_to_fill", non_opc) * dbu;
   non_opc_config.space_to_non_fill
       = getValue("space_to_non_fill", non_opc) * dbu;
@@ -53,6 +80,7 @@ FillLayerConfig readLayerConfig(const pt::ptree& layer, int dbu)
   }
   const auto& opc = layer.get_child("opc");
   auto& opc_config = config.opc;
+  opc_config.pattern = readPattern(opc);
   config.opc_halo = getValue("halo", opc) * dbu;
   opc_config.space_to_fill = getValue("space_to_fill", opc) * dbu;
   opc_config.space_to_non_fill = getValue("space_to_non_fill", opc) * dbu;

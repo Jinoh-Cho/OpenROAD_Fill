@@ -181,6 +181,7 @@ def main():
     parser.add_argument("--solver-log", action="store_true",
                         help="Record solver residuals/objectives/gap in openroad.log")
     parser.add_argument("--verify-post-fill-density", action="store_true")
+    parser.add_argument("--selection-policy", choices=("greedy", "uniform"), default="greedy")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
@@ -204,6 +205,7 @@ def main():
                    "--resolution", "4", "--window", "50",
                    "--lp-solver", "pdlp", "--lp-threads", "16", "--threads", "1",
                    "--candidate-threads", str(threads), "--placement-threads", str(threads),
+                   "--selection-policy", args.selection_policy,
                    "--repeats", str(args.repeats), "--timeout", str(args.timeout),
                    "--write-reports", "--output-dir", str(destination)]
         if args.openroad:

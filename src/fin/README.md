@@ -51,8 +51,8 @@ tile_grid_metal_area
 
 `fixed_dissection_lp_min_var_fill` first generates legal non-OPC fill candidates in
 each tile using the JSON shape and spacing rules. It uses the sum of those
-candidates as the LP capacity, then inserts a subset whose area does not
-exceed the LP solution for that tile. Candidates are inset from tile
+candidates as the LP capacity, then selects a subset according to `-selection_policy`. The default `greedy`
+policy never exceeds the LP solution for that tile. Candidates are inset from tile
 boundaries by the fill spacing, so independently selected candidates in
 neighboring tiles remain legal. This initial implementation deliberately does
 not run a post-placement repair pass and does not yet place OPC fill.
@@ -72,6 +72,7 @@ fixed_dissection_lp_min_var_fill
     [-lp_threads threads]
     [-candidate_threads threads]
     [-placement_threads threads]
+    [-selection_policy greedy|uniform]
     [-verify_post_fill_density bool]
     [-lp_diagnostics prefix]
     [-svg file]
@@ -155,11 +156,22 @@ If existing wire metal already exceeds a tile or window maximum, FIN warns and
 omits that region's maximum density constraint. A region exactly at its maximum
 retains the constraint and cannot receive additional fill. Other regions retain
 their upper bounds, and legal fill capacity and spacing rules always apply.
-`-min_window_density` is an optional hard minimum post-fill density for every
-sliding window. `-max_window_density` limits each sliding window unless existing
+`-min_window_density` requests a minimum post-fill density for every sliding
+window. If a window's candidate capacity (including tile upper bounds) cannot
+reach it, the minimum required fill is capped at that capacity, rather than
+rejecting the layer or dropping the minimum to zero. Such a window is required
+to use all available candidate area in the continuous LP. Attainable window
+minimums are unchanged. The JSON density report records
+`relaxed_window_minimum_count` and `relaxed_window_minimums`, with each affected
+window's index, requested/effective density and requested/effective fill area
+in DBU². These effective bounds describe the candidate model; discrete shape
+selection may place less area.
+`-max_window_density` limits each sliding window unless existing
 metal already exceeds it, and defaults to `1.0`. Density reports still count
 violations against the requested limits, including regions whose constraints
-were omitted. If a tile's legal capacity, the remaining density bounds, or the
+were omitted or relaxed. Capping individual window minimums does not resolve
+every conflict between overlapping windows and their upper bounds. If the
+remaining density bounds or the
 discrete fill candidates cannot satisfy the constraints together, the command
 reports
 an infeasible error and does not retain any fill created by that command.
@@ -190,6 +202,7 @@ fixed_dissection_lp_min_amount_fill
     [-lp_threads threads]
     [-candidate_threads threads]
     [-placement_threads threads]
+    [-selection_policy greedy|uniform]
     [-verify_post_fill_density bool]
     [-lp_diagnostics prefix]
     [-svg file]
@@ -221,6 +234,7 @@ fixed_dissection_lp_lip_fill
     [-lp_threads threads]
     [-candidate_threads threads]
     [-placement_threads threads]
+    [-selection_policy greedy|uniform]
     [-verify_post_fill_density bool]
     [-lp_diagnostics prefix]
     [-svg file]
@@ -229,6 +243,105 @@ fixed_dissection_lp_lip_fill
 
 The return value is the area actually placed, in DBU². Output options and
 defaults are shared with `fixed_dissection_lp_min_var_fill`.
+
+### Candidate selection policy
+
+All fixed-dissection LP fill commands accept `-selection_policy greedy|uniform`.
+The default is `greedy`; existing calls retain their selection and output order.
+
+- `greedy`: traverse each tile's candidate vector in input order and accept a
+  rectangle only if adding its area stays at or below that tile's LP target.
+- `uniform`: use spatially distributed selection inspired by regular bitmap
+  scheduling. Within each tile, group candidates by dimensions and grid offset
+  using pitches `width + space_x`, `height + space_y`. Groups retain their first
+  appearance order. Two eight-neighbor erosions create three interior/boundary
+  bands; each band is split into four row/column parity classes. Visit interior
+  classes before boundary classes, scanning each class in row/column order.
+  Empty sites outside each group are treated as unavailable. Selected rectangles
+  are emitted in original candidate order for deterministic DB IDs and masks.
+
+Uniform selection accepts a rectangle while the target deficit exceeds
+`0.001 DBU^2`. The last rectangle can therefore exceed the LP target by less
+than its own area; insufficient capacity can still leave a deficit. This changes
+rounding as well as placement locations. It can exceed requested tile/window
+maximum densities; actual post-placement densities and violations are reported,
+and there is no additional density repair pass. The LP formulation is unchanged.
+
+This is an OpenROAD tile-local adaptation, not a bit-for-bit BlazeDFM port.
+Multiple sizes/grid origins are supported, tiles remain independent, and no fill
+crosses a tile boundary. It encourages spatial distribution rather than solving
+an additional placement-uniformity optimization. Both policies use
+`-placement_threads`. `-verify_post_fill_density 1` verifies incremental areas
+against full geometric density; it does not enforce density limits.
+
+The scalability runner accepts `--selection-policy uniform`; the TPU thread
+sweep wrapper forwards it. Use separate output directories to compare policies.
+The Tcl benchmark worker also accepts `FIN_SELECTION_POLICY=uniform`. Selection
+policy is recorded in experiment metadata, run summaries and the placement log.
+Rebuild OpenROAD before using this option.
+
+Uniform selection uses a byte-addressed bitmap for compact grid groups. Two
+empty border cells preserve the outside-is-unavailable rule, and row-major
+scanning preserves the prior hash implementation's sorted priority order.
+Padded groups above 1,048,576 cells, or with more than roughly eight cells per
+candidate, use the hash fallback. Dense temporary lookup buffers are limited to
+approximately 10 MiB per active group on a 64-bit build, excluding candidate
+lists and priority bands. No new Tcl option is required: `uniform` selects the
+backend automatically; `greedy` remains the default.
+
+Uniform also handles groups of at most four candidates on the stack (all such
+sites are in the boundary band), reuses bitmap/index/priority buffers within
+each tile, and caches consecutive group keys using an unordered lookup. Group
+IDs retain first-appearance order; lookup iteration order is never used for
+selection. These optimizations preserve selection priority, output order and
+area rounding, and do not change the public selection options.
+
+### Grid and stagger patterns in JSON
+
+Both ordinary `density_fill` and LP fill support the following fields inside a
+layer's `non-opc` or `opc` rules (LP still uses non-OPC only):
+
+```json
+"non-opc": {
+  "datatype": 0,
+  "width": [0.16, 0.08, 0.04],
+  "height": [0.16, 0.08, 0.04],
+  "space_to_fill": 0.018,
+  "space_to_non_fill": 0.018,
+  "pattern": "stagger",
+  "stagger_offset": 0.5
+}
+```
+
+`pattern` is `grid` (default, existing polygon-local phase) or `stagger`.
+Stagger requires an explicit finite `stagger_offset` in `[0, 1)`. This is a
+fraction of each oriented shape's horizontal pitch (`width + space_x`), not
+microns. Odd logical rows shift in +x by that fraction; even rows do not shift.
+The displacement is rounded to the nearest integer DBU and reduced modulo the
+pitch. For example, width 0.16 um plus spacing 0.018 um at DBU=1000 gives an
+89 DBU shift for offset 0.5. Different shape sizes get their own pitch-based shift.
+`stagger_offset` without `pattern: stagger`, an unknown pattern, or a missing /
+invalid stagger offset is rejected. No staggering is inferred from fill selection.
+
+LP stagger patterns use the same absolute origin as the command's tile grid
+(`-origin` is relative to the fill region). Ordinary `density_fill` uses the
+lower-left of its fill region. This common origin fixes phase across polygons
+and tiles, including negative row indices. Offset 0 means a globally aligned
+unshifted lattice, which can differ from the legacy polygon-local grid phase.
+Existing obstacle clipping, tile boundary spacing, pruning and multi-size spacing
+reservation are retained. Candidate capacity is recomputed before solving the LP.
+
+`-selection_policy greedy|uniform` applies only to LP commands (Min Amount,
+Min Var, Lip). `density_fill` accepts neither selection option and simply fills
+the available pattern sites. The scalability runner rejects an explicitly
+selected policy if `density` is among `--methods`. Uniform maps staggered physical
+coordinates back to logical rows/columns before building its bitmap, preserving
+neighbor/parity behavior instead of splitting odd and even rows into separate grids.
+
+Example ASAP7 M2 stagger rules are available in the workspace at
+`/home/jocho/OpenFill/scripts/fill_asap7_m2_stagger_0p5.json`; rebuild OpenROAD
+before running them.
+
 
 ## Source architecture
 

@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "CandidateSelection.h"
 #include "FillConfig.h"
 #include "polygon.h"
 
@@ -105,7 +106,11 @@ struct LayerFillPlacement
 LayerFillPlacement selectLayerFillCandidates(
     const std::vector<std::vector<Rectangle>>& candidates,
     const std::vector<double>& target_areas,
-    int threads);
+    int threads,
+    SelectionPolicy policy = SelectionPolicy::Greedy,
+    int space_x = 0,
+    int space_y = 0,
+    const FillPatternConfig& pattern = {});
 
 // Resolve fill spacing and line-end spacing along the layer's direction.
 std::pair<int, int> getSpacing(odb::dbTechLayer* layer,

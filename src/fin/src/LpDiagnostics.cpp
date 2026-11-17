@@ -228,8 +228,7 @@ void writeFillLpFailureDiagnostics(const FixedDissectionLpProblem& problem,
       bounds[w].area += problem.tile_areas[tile];
       bounds[w].feature += problem.feature_areas[tile];
     }
-    bounds[w].minimum = std::max(
-        problem.min_window_density * bounds[w].area - bounds[w].feature, 0.0);
+    bounds[w].minimum = problem.minimumWindowFillArea(w);
     bounds[w].maximum
         = problem.maximumWindowFillArea(bounds[w].area, bounds[w].feature);
   }

@@ -74,6 +74,24 @@ struct FixedDissectionLpProblem
     const double budget = max_window_density * window_area - feature_area;
     return budget < 0.0 ? std::numeric_limits<double>::infinity() : budget;
   }
+
+  // Keep the requested lower bound where attainable. Otherwise require all
+  // available candidate area, rather than rejecting the entire layer or
+  // dropping the lower bound to zero. Window upper bounds remain independent:
+  // overlapping windows can still impose genuinely conflicting constraints.
+  double minimumWindowFillArea(size_t window_index) const
+  {
+    double area = 0.0;
+    double feature = 0.0;
+    double capacity = 0.0;
+    for (const size_t tile : windows[window_index]) {
+      area += tile_areas[tile];
+      feature += feature_areas[tile];
+      capacity += maximumFillArea(tile);
+    }
+    return std::min(std::max(min_window_density * area - feature, 0.0),
+                    capacity);
+  }
 };
 
 struct FixedDissectionLpResult

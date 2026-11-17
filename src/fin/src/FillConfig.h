@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "FillPattern.h"
 #include "odb/PtrSetMap.h"
 #include "odb/db.h"
 #include "utl/Logger.h"
@@ -18,6 +19,7 @@ struct FillShapesConfig
   int space_to_fill;
   int space_to_non_fill;
   int space_line_end;
+  FillPatternConfig pattern{};
 };
 
 struct FillLayerConfig

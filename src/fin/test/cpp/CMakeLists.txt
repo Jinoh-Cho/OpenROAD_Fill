@@ -38,6 +38,11 @@ add_dependencies(build_and_test MetalCollectionTest)
 add_executable(TileFreeAreasTest ../tile_free_areas/TileFreeAreasTest.cpp
   ../tile_free_areas/InitialDensityTest.cpp
   ../tile_free_areas/CandidateOptimizationTest.cpp
+  ../tile_free_areas/SelectionPolicyTest.cpp
+  ../tile_free_areas/UniformSelectionReference.cpp
+  ../tile_free_areas/UniformBitmapTest.cpp
+  ../tile_free_areas/UniformBitmapReference.cpp
+  ../tile_free_areas/StaggerPatternTest.cpp
   ../tile_free_areas/CandidateReference.cpp)
 target_include_directories(TileFreeAreasTest PRIVATE ../../src)
 target_link_libraries(TileFreeAreasTest
