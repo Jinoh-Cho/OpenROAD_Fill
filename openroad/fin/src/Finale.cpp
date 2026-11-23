@@ -4,6 +4,7 @@
 #include "fin/Finale.h"
 
 #include "DensityFill.h"
+#include "LPFill.h"
 #include "odb/db.h"
 #include "odb/geom.h"
 #include "utl/Logger.h"
@@ -26,6 +27,12 @@ void Finale::densityFill(const char* rules_filename, const odb::Rect& fill_area)
 {
   DensityFill filler(db_, logger_, debug_);
   filler.fill(rules_filename, fill_area);
+}
+
+void Finale::lpFill(const LPFillOptions& options)
+{
+  LPFill filler(db_, logger_);
+  filler.fill(options);
 }
 
 }  // namespace fin

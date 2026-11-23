@@ -8,4 +8,5 @@
 %}
 
 %include "../../Exception-py.i"
+%include "std_string.i"
 %include "fin/Finale.h"

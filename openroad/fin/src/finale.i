@@ -26,5 +26,35 @@ density_fill_cmd(const char* rules_filename,
   finale->densityFill(rules_filename, fill_area);
 }
 
+void
+lp_fill_cmd(const char* rules_filename,
+            const char* objective,
+            const char* solver,
+            int solver_threads,
+            int num_threads,
+            double window_width,
+            double window_height,
+            double step_x,
+            double step_y,
+            double min_density,
+            double max_density,
+            const char* placement_strategy)
+{
+  fin::LPFillOptions options;
+  options.rules_file = rules_filename;
+  options.objective = objective;
+  options.solver = solver;
+  options.solver_threads = solver_threads;
+  options.num_threads = num_threads;
+  options.window_width = window_width;
+  options.window_height = window_height;
+  options.step_x = step_x;
+  options.step_y = step_y;
+  options.min_density = min_density;
+  options.max_density = max_density;
+  options.placement_strategy = placement_strategy;
+  ord::OpenRoad::openRoad()->getFinale()->lpFill(options);
+}
+
 %} // inline
 

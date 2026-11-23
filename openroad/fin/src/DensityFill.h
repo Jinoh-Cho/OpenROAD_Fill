@@ -3,19 +3,15 @@
 
 #pragma once
 
-#include <map>
 #include <memory>
-#include <vector>
 
-#include "boost/property_tree/json_parser.hpp"
-#include "odb/PtrSetMap.h"
+#include "FillCommon.h"
 #include "odb/db.h"
 #include "odb/geom.h"
 #include "utl/Logger.h"
 
 namespace fin {
 
-struct DensityFillLayerConfig;
 class Graphics;
 
 ////////////////////////////////////////////////////////////////
@@ -36,15 +32,12 @@ class DensityFill
   void fill(const char* cfg_filename, const odb::Rect& fill_area);
 
  private:
-  void loadConfig(const char* cfg_filename, odb::dbTech* tech);
-  void readAndExpandLayers(odb::dbTech* tech,
-                           boost::property_tree::ptree& tree);
   void fillLayer(odb::dbBlock* block,
                  odb::dbTechLayer* layer,
                  const odb::Rect& fill_bounds);
 
   odb::dbDatabase* db_;
-  odb::PtrMap<odb::dbTechLayer, DensityFillLayerConfig> layers_;
+  FillLayerConfigs layers_;
   std::unique_ptr<Graphics> graphics_;
   utl::Logger* logger_;
 };

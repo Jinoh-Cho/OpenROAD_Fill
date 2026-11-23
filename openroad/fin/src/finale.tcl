@@ -35,3 +35,48 @@ proc density_fill { args } {
 
   fin::density_fill_cmd $rules_file $fill_area
 }
+
+sta::define_cmd_args "lp_fill" {
+  -rules rules_file
+  -objective min_fill|min_var
+  -window_size {width height}
+  -window_step {x_step y_step}
+  [-solver glop|pdlp]
+  [-solver_threads threads]
+  [-num_threads threads]
+  [-min_density density]
+  [-max_density density]
+  [-placement_strategy sequential|uniform]
+}
+
+proc lp_fill { args } {
+  sta::parse_key_args "lp_fill" args \
+    keys {-rules -objective -solver -solver_threads -num_threads
+      -window_size -window_step -min_density -max_density -placement_strategy} flags {}
+  sta::check_argc_eq0 "lp_fill" $args
+
+  foreach key {-rules -objective -window_size -window_step} {
+    if { ![info exists keys($key)] } {
+      utl::error FIN 17 "The $key argument must be specified."
+    }
+  }
+  foreach key {-window_size -window_step} {
+    if { [llength $keys($key)] != 2 } {
+      utl::error FIN 18 "The $key argument must be a list of 2 distances in microns."
+    }
+  }
+  foreach {key value} {
+    -solver glop -solver_threads 1 -num_threads 1
+    -min_density 0.20 -max_density 0.70 -placement_strategy sequential
+  } {
+    if { ![info exists keys($key)] } {
+      set keys($key) $value
+    }
+  }
+  lassign $keys(-window_size) width height
+  lassign $keys(-window_step) step_x step_y
+  fin::lp_fill_cmd $keys(-rules) $keys(-objective) $keys(-solver) \
+    $keys(-solver_threads) $keys(-num_threads) \
+    $width $height $step_x $step_y \
+    $keys(-min_density) $keys(-max_density) $keys(-placement_strategy)
+}

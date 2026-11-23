@@ -17,7 +17,13 @@ cc_library(
     srcs = [
         "src/DensityFill.cpp",
         "src/DensityFill.h",
+        "src/FillCheck.cpp",
+        "src/FillCheck.h",
+        "src/FillCommon.cpp",
+        "src/FillCommon.h",
         "src/Finale.cpp",
+        "src/LPFill.cpp",
+        "src/LPFill.h",
         "src/MakeFinale.cpp",
         "src/graphics.cpp",
         "src/graphics.h",
@@ -29,6 +35,7 @@ cc_library(
         "include/fin/Finale.h",
         "include/fin/MakeFinale.h",
     ],
+    copts = ["-fopenmp"],
     includes = [
         "include",
     ],
@@ -40,6 +47,9 @@ cc_library(
         "@boost.lexical_cast",
         "@boost.polygon",
         "@boost.property_tree",
+        "@openmp",
+        "@or-tools//ortools/linear_solver",
+        "@or-tools//ortools/linear_solver:linear_solver_base",
         "@tcl_lang//:tcl",
     ],
 )
