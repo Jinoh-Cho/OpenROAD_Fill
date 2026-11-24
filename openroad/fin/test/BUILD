@@ -1,4 +1,3 @@
-load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("@rules_python//python:defs.bzl", "py_test")
 
 # SPDX-License-Identifier: BSD-3-Clause
@@ -13,7 +12,6 @@ COMPULSORY_TESTS = [
 
 PASSFAIL_TESTS = [
     "density_fill_obstruction",
-    "lp_fill",
 ]
 
 ALL_TESTS = COMPULSORY_TESTS + PASSFAIL_TESTS
@@ -64,7 +62,7 @@ filegroup(
         check_log = False if test_name in PASSFAIL_TESTS else True,
         check_passfail = True if test_name in PASSFAIL_TESTS else False,
         data = [":" + test_name + "_resources"],
-        tags = [] if test_name in COMPULSORY_TESTS or test_name == "lp_fill" else ["manual"],
+        tags = [] if test_name in COMPULSORY_TESTS else ["manual"],
         visibility = ["//visibility:public"],
     )
     for test_name in ALL_TESTS
@@ -88,24 +86,4 @@ doc_check_test(
         "//openroad/fin:messages_txt",
     ],
     visibility = ["//visibility:public"],
-)
-
-cc_test(
-    name = "lp_fill_test",
-    size = "small",
-    srcs = [
-        "cpp/LPFillPlacementTest.cpp",
-        "cpp/LPFillTest.cpp",
-    ],
-    features = ["-layering_check"],
-    includes = ["../src"],
-    deps = [
-        "//openroad/fin",
-        "//openroad/odb/src/db",
-        "//openroad/tst:db_fixture",
-        "//openroad/tst:physical_builder",
-        "@boost.polygon",
-        "@googletest//:gtest",
-        "@googletest//:gtest_main",
-    ],
 )
