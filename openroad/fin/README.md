@@ -98,7 +98,7 @@ The schema for the `json` is:
       "non-opc": {
         "datatype":  "<list of integer gds datatypes>",
         "width":   "<list of widths in microns>",
-        "height":   "<list of heightsin microns>",
+        "height":   "<list of heights in microns>",
         "space_to_fill": "<real: spacing between fills in microns>",
         "space_to_non_fill": "<real: spacing to non-fill shapes in microns>",
         "stagger": "ON or OFF (default OFF)",
@@ -146,6 +146,10 @@ logical row `r` and column `c`, shape width `w`, height `h`, and fill spacings
 - `y = origin_y + r * (h + sy) + (c mod 2) * Y_OFFSET`
 
 The staggered option for `opc` section is not currently supported.
+
+This configuration format originated in KLayout (except for `stagger` and
+`stagger_offset`, which were newly added). Some legacy fields are accepted by
+the parser but ignored (e.g., `space_to_outline`).
 
 ## Regression tests
 
