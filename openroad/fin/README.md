@@ -109,6 +109,14 @@ The schema for the `json` is:
 }
 ```
 
+The opc section is optional depending on your process.
+
+The width/height lists are effectively parallel arrays of shapes to try in left to right order (generally larger to smaller).
+
+The layer grouping is for convenience. For example in some technologies many layers have similar rules so it is convenient to have a Mx, Cx group.
+
+This all started out in klayout so there are some obsolete fields that the parser accepts but ignores (e.g., space_to_outline).
+
 **Staggered non-OPC fill**
 
 The optional `stagger` setting is the string `"ON"` or `"OFF"`, with `"OFF"`
