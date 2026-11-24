@@ -34,8 +34,8 @@ lp_fill_cmd(const char* rules_filename,
             int num_threads,
             double window_width,
             double window_height,
-            double step_x,
-            double step_y,
+            double step_ratio_x,
+            double step_ratio_y,
             double min_density,
             double max_density,
             double min_tile_density,
@@ -49,8 +49,8 @@ lp_fill_cmd(const char* rules_filename,
   options.num_threads = num_threads;
   options.window_width = window_width;
   options.window_height = window_height;
-  options.step_x = step_x;
-  options.step_y = step_y;
+  options.step_x = step_ratio_x;
+  options.step_y = step_ratio_y;
   options.min_density = min_density;
   options.max_density = max_density;
   options.min_tile_density = min_tile_density;

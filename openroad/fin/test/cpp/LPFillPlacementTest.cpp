@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -74,8 +75,8 @@ class FillPlacementTest : public tst::DbFixture,
     result.objective = GetParam();
     result.window_width = 20;
     result.window_height = 20;
-    result.step_x = 10;
-    result.step_y = 10;
+    result.step_x = 0.5;
+    result.step_y = 0.5;
     result.num_threads = 4;
     return result;
   }
@@ -150,6 +151,36 @@ TEST_P(FillPlacementTest, PreservesExistingFillAndHonorsObstructionsAndSpacing)
   for (const double density : grid.windowDensities(full)) {
     EXPECT_LE(density, config.max_density + 1e-5);
   }
+}
+
+TEST_P(FillPlacementTest, StepRatiosUseEachWindowDimension)
+{
+  auto config = options();
+  config.window_width = 20;
+  config.window_height = 10;
+  config.step_x = 0.5;
+  config.step_y = 0.5;
+  LPFill filler(getDb(), getLogger());
+  ASSERT_NO_THROW(filler.fill(config));
+  ASSERT_FALSE(block_->getFills().empty());
+  // 50% of a 20x10 um window gives a 10x5 um step.
+  const FillGrid grid(
+      block_->getCoreArea(), odb::Point(20000, 10000), odb::Point(10000, 5000));
+  for (auto* fill : block_->getFills()) {
+    odb::Rect rect;
+    fill->getRect(rect);
+    EXPECT_TRUE(std::ranges::any_of(
+        grid.tiles(), [&](const auto& tile) { return tile.contains(rect); }));
+  }
+}
+
+TEST_P(FillPlacementTest, RejectsStepRatiosThatRoundToZeroDbu)
+{
+  auto config = options();
+  config.step_x = 1e-12;
+  LPFill filler(getDb(), getLogger());
+  EXPECT_THROW(filler.fill(config), std::invalid_argument);
+  EXPECT_TRUE(block_->getFills().empty());
 }
 
 TEST_P(FillPlacementTest, CandidatesAreNonOverlappingAndRetainConfiguredSizes)

@@ -38,7 +38,7 @@ lp_fill
     -rules rules_file
     -objective min_fill|min_var
     -window_size {width height}
-    -window_step {x_step y_step}
+    -window_step {x_ratio y_ratio}
     [-solver glop|pdlp]
     [-solver_threads threads]
     [-num_threads threads]
@@ -54,55 +54,25 @@ lp_fill
 | ----- | ----- |
 | `-rules` | Required JSON fill rule file. LP fill currently supports non-OPC rules only. |
 | `-objective` | Required. `min_fill` minimizes total fill area; `min_var` maximizes the minimum window density (the J40 max-min LP), rather than minimizing statistical variance. |
-| `-window_size` | Required positive window width and height, in microns. Windows must fit inside the core. |
-| `-window_step` | Required positive horizontal and vertical distance between window starts, in microns. Windows start at the core lower-left corner; only fully contained windows are evaluated. |
+| `-window_size` | Required. window width and height for density check, in microns.|
+| `-window_step` | Required. Horizontal and vertical step ratios relative to window width and height, respectively. Each ratio is in `(0, 1]`; `0.25` means 25% of the corresponding window dimension. |
 | `-solver` | `glop` (default) or `pdlp`, both open-source OR-Tools LP solvers. |
-| `-solver_threads` | Positive solver thread count; default `1`. PDLP supports multiple threads; GLOP uses one and warns if another count is requested. |
-| `-num_threads` | Positive thread count for tile geometry and selection; default `1`. Database insertion is serial. |
-| `-min_density` | Requested minimum post-fill window density, from `0` to `1`; default `0.20`. |
+| `-solver_threads` | Number of CPU threads used by the LP solver (Only for PDLP). |
+| `-num_threads` | Number of CPU threads used for fill processing outside the LP solver.|
+| `-min_density` | Minimum post-fill window density, from `0` to `1`; default `0.20`. |
 | `-max_density` | Maximum post-fill window density, from `0` to `1` and at least the minimum; default `0.70`. |
-| `-min_tile_density` | Requested minimum post-fill tile density, from `0` to `1`; default `0` (no tile minimum). Includes existing metal. |
-| `-max_tile_density` | Maximum post-fill tile density, from `0` to `1` and at least the tile minimum; default `1` (no additional tile limit). Includes existing metal. |
+| `-min_tile_density` | Minimum post-fill tile density, from `0` to `1`; default `0`.|
+| `-max_tile_density` | Maximum post-fill tile density, from `0` to `1` and at least the tile minimum; default `1`.|
 
-Placement always selects candidates sequentially in generation order, without
-exceeding the LP area budget. There is no placement strategy selection option.
 
-Window boundaries partition the core into independent rectangular tiles. Fill
-candidates remain inside their tiles, with conservative spacing at tile edges.
-The available candidate packing may differ from `density_fill` even under the
-same rules. Existing fill is included in density and spacing calculations.
-Fill obstructions block placement but do not contribute metal density.
-
-Tile bounds apply to each partition tile independently of the window bounds.
-A tile minimum exceeding its candidate capacity is relaxed to that capacity,
-and the number of relaxed tile bounds is reported. A tile already above a
-specified maximum receives no additional fill; existing metal is retained.
-A tile maximum below `1` can conflict with window minimum constraints and make
-the LP infeasible. The default tile bounds preserve the original behavior.
-When tile bounds are enabled, actual post-fill tile density extrema and counts
-of tiles below/above the requested bounds are logged separately from windows.
-Whole-shape selection can leave a tile below its continuous LP minimum.
-
-A window whose requested minimum exceeds its candidate capacity requires all
-available candidate area instead. The command reports how many lower bounds
-were relaxed. `set_debug_level FIN lp_fill 1` additionally reports each relaxed
-window, its effective lower bound, and its available candidate area.
-Existing metal exceeding an upper bound cannot be removed, so
-that upper bound is omitted. Other window upper bounds remain active; conflicts
-between overlapping windows can still make the LP infeasible. A solver failure
-returns a Tcl error and removes all fill created by that invocation.
-
-The LP controls continuous areas. Whole-shape selection can leave windows below
-the requested minimum; reported post-fill density and violation counts reflect
-actual placement against the original requested bounds. Areas are accumulated
-from non-overlapping tile-contained fill shapes. The log reports preparation,
-solver, and placement times separately, excluding design loading.
+For example, `-window_size {50 30} -window_step {0.25 0.5}` uses actual steps
+of `12.5` microns horizontally and `15` microns vertically. Step ratios are
+converted to distances and rounded to database units before constructing the
+tile/window grid.
 
 ## Example scripts
 
 The rules `json` file controls fill and you can see an example
-[here](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts/blob/master/flow/platforms/sky130hd/fill.json).
-
 The schema for the `json` is:
 
 ```json

@@ -229,6 +229,32 @@ TEST(FillLPOptionsTest, RejectsInvalidOptions)
   EXPECT_THROW(validateLPFillOptions(invalid), std::invalid_argument);
 }
 
+TEST(FillLPOptionsTest, StepRatiosAreFractionsOfWindowDimensions)
+{
+  LPFillOptions options;
+  options.rules_file = "unused.json";
+  EXPECT_DOUBLE_EQ(options.step_x, 0.25);
+  EXPECT_DOUBLE_EQ(options.step_y, 0.25);
+  for (const double ratio : {0.25, 0.5, 1.0}) {
+    options.step_x = ratio;
+    options.step_y = ratio;
+    EXPECT_NO_THROW(validateLPFillOptions(options));
+  }
+  for (const double bad : {0.0,
+                           -0.25,
+                           1.01,
+                           12.5,
+                           std::numeric_limits<double>::infinity(),
+                           std::numeric_limits<double>::quiet_NaN()}) {
+    auto invalid = options;
+    invalid.step_x = bad;
+    EXPECT_THROW(validateLPFillOptions(invalid), std::invalid_argument);
+    invalid = options;
+    invalid.step_y = bad;
+    EXPECT_THROW(validateLPFillOptions(invalid), std::invalid_argument);
+  }
+}
+
 TEST(FillLPInputTest, RejectsInvalidTileIndicesAndAreas)
 {
   LPFillOptions options;

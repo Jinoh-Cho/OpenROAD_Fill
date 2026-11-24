@@ -40,7 +40,7 @@ sta::define_cmd_args "lp_fill" {
   -rules rules_file
   -objective min_fill|min_var
   -window_size {width height}
-  -window_step {x_step y_step}
+  -window_step {x_ratio y_ratio}
   [-solver glop|pdlp]
   [-solver_threads threads]
   [-num_threads threads]
@@ -62,10 +62,11 @@ proc lp_fill { args } {
       utl::error FIN 17 "The $key argument must be specified."
     }
   }
-  foreach key {-window_size -window_step} {
-    if { [llength $keys($key)] != 2 } {
-      utl::error FIN 18 "The $key argument must be a list of 2 distances in microns."
-    }
+  if { [llength $keys(-window_size)] != 2 } {
+    utl::error FIN 18 "The -window_size argument must be a list of 2 distances in microns."
+  }
+  if { [llength $keys(-window_step)] != 2 } {
+    utl::error FIN 21 "The -window_step argument must be a list of 2 window size ratios."
   }
   foreach {key value} {
     -solver glop -solver_threads 1 -num_threads 1
@@ -77,10 +78,10 @@ proc lp_fill { args } {
     }
   }
   lassign $keys(-window_size) width height
-  lassign $keys(-window_step) step_x step_y
+  lassign $keys(-window_step) step_ratio_x step_ratio_y
   fin::lp_fill_cmd $keys(-rules) $keys(-objective) $keys(-solver) \
     $keys(-solver_threads) $keys(-num_threads) \
-    $width $height $step_x $step_y \
+    $width $height $step_ratio_x $step_ratio_y \
     $keys(-min_density) $keys(-max_density) \
     $keys(-min_tile_density) $keys(-max_tile_density)
 }

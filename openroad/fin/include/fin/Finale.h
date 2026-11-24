@@ -20,8 +20,9 @@ struct LPFillOptions
   int num_threads = 1;
   double window_width = 50.0;
   double window_height = 50.0;
-  double step_x = 12.5;
-  double step_y = 12.5;
+  // Fractions of the corresponding window width and height.
+  double step_x = 0.25;
+  double step_y = 0.25;
   double min_density = 0.2;
   double max_density = 0.7;
   double min_tile_density = 0.0;

@@ -371,13 +371,16 @@ void validateLPFillOptions(const LPFillOptions& options)
   if (options.solver_threads < 1 || options.num_threads < 1) {
     throw std::invalid_argument("Thread counts must be positive.");
   }
-  for (const double value : {options.window_width,
-                             options.window_height,
-                             options.step_x,
-                             options.step_y}) {
+  for (const double value : {options.window_width, options.window_height}) {
     if (!std::isfinite(value) || value <= 0) {
       throw std::invalid_argument(
-          "Window size and step must be finite and positive.");
+          "Window dimensions must be finite and positive.");
+    }
+  }
+  for (const double ratio : {options.step_x, options.step_y}) {
+    if (!std::isfinite(ratio) || ratio <= 0 || ratio > 1) {
+      throw std::invalid_argument(
+          "Window step ratios must satisfy 0 < ratio <= 1.");
     }
   }
   if (!std::isfinite(options.min_density) || !std::isfinite(options.max_density)
@@ -468,7 +471,8 @@ void LPFill::fill(const LPFillOptions& options)
       block->getCoreArea(),
       odb::Point(toDbu(options.window_width, dbu),
                  toDbu(options.window_height, dbu)),
-      odb::Point(toDbu(options.step_x, dbu), toDbu(options.step_y, dbu)));
+      odb::Point(toDbu(options.window_width * options.step_x, dbu),
+                 toDbu(options.window_height * options.step_y, dbu)));
   const auto layers
       = loadFillRules(options.rules_file.c_str(), db_->getTech(), logger_);
   if (options.solver == "glop" && options.solver_threads != 1) {
