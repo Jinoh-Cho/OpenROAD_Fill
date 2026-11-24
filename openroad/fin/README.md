@@ -58,13 +58,13 @@ lp_fill
 | `-objective` | Required. `min_var` maximizes the minimum window density [1], rather than minimizing statistical variance; `min_fill` minimizes total fill area [2].|
 | `-window_size` | Required. window width and height for density check, in microns.|
 | `-window_step` | Required. Horizontal and vertical step ratios relative to window width and height, respectively. Each ratio is in `(0, 1]`; `0.25` means 25% of the corresponding window dimension. |
-| `-solver` | `glop` (default) or `pdlp`, both open-source OR-Tools LP solvers. |
-| `-solver_threads` | Number of CPU threads used by the LP solver (Only for PDLP). |
-| `-num_threads` | Number of CPU threads used for fill processing outside the LP solver.|
-| `-min_density` | Minimum post-fill window density, from `0` to `1`; default `0.20`. |
-| `-max_density` | Maximum post-fill window density, from `0` to `1` and at least the minimum; default `0.70`. |
-| `-min_tile_density` | Minimum post-fill tile density, from `0` to `1`; default `0`.|
-| `-max_tile_density` | Maximum post-fill tile density, from `0` to `1` and at least the tile minimum; default `1`.|
+| `-solver` | Optional. `glop` (default) or `pdlp`, both open-source OR-Tools LP solvers. |
+| `-solver_threads` | Optional. Number of CPU threads used by the LP solver (Only for PDLP). |
+| `-num_threads` | Optional. Number of CPU threads used for fill processing outside the LP solver.|
+| `-min_density` | Optional. Minimum post-fill window density, from `0` to `1`; default `0.20`. |
+| `-max_density` | Optional. Maximum post-fill window density, from `0` to `1` and at least the minimum; default `0.70`. |
+| `-min_tile_density` | Optional. Minimum post-fill tile density, from `0` to `1`; default `0`.|
+| `-max_tile_density` | Optional. Maximum post-fill tile density, from `0` to `1` and at least the tile minimum; default `1`.|
 
 
 For example, `-window_size {50 30} -window_step {0.25 0.5}` uses actual steps
