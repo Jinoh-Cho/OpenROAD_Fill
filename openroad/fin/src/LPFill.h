@@ -37,6 +37,7 @@ struct FillLPSolution
   bool solved = false;
   std::vector<double> fill_areas;
   size_t relaxed_windows = 0;
+  size_t relaxed_tiles = 0;
   std::vector<RelaxedWindowMinimum> relaxed_minimums;
   int64_t iterations = -1;
   std::string status;

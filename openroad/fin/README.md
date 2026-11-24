@@ -44,7 +44,8 @@ lp_fill
     [-num_threads threads]
     [-min_density density]
     [-max_density density]
-    [-placement_strategy sequential|uniform]
+    [-min_tile_density density]
+    [-max_tile_density density]
 ```
 
 #### Options
@@ -60,13 +61,27 @@ lp_fill
 | `-num_threads` | Positive thread count for tile geometry and selection; default `1`. Database insertion is serial. |
 | `-min_density` | Requested minimum post-fill window density, from `0` to `1`; default `0.20`. |
 | `-max_density` | Maximum post-fill window density, from `0` to `1` and at least the minimum; default `0.70`. |
-| `-placement_strategy` | `sequential` (default) selects candidates in generation order. `uniform` prioritizes interior candidates and sparse grid parity classes. Both select whole shapes within the LP area budget. |
+| `-min_tile_density` | Requested minimum post-fill tile density, from `0` to `1`; default `0` (no tile minimum). Includes existing metal. |
+| `-max_tile_density` | Maximum post-fill tile density, from `0` to `1` and at least the tile minimum; default `1` (no additional tile limit). Includes existing metal. |
+
+Placement always selects candidates sequentially in generation order, without
+exceeding the LP area budget. There is no placement strategy selection option.
 
 Window boundaries partition the core into independent rectangular tiles. Fill
 candidates remain inside their tiles, with conservative spacing at tile edges.
 The available candidate packing may differ from `density_fill` even under the
 same rules. Existing fill is included in density and spacing calculations.
 Fill obstructions block placement but do not contribute metal density.
+
+Tile bounds apply to each partition tile independently of the window bounds.
+A tile minimum exceeding its candidate capacity is relaxed to that capacity,
+and the number of relaxed tile bounds is reported. A tile already above a
+specified maximum receives no additional fill; existing metal is retained.
+A tile maximum below `1` can conflict with window minimum constraints and make
+the LP infeasible. The default tile bounds preserve the original behavior.
+When tile bounds are enabled, actual post-fill tile density extrema and counts
+of tiles below/above the requested bounds are logged separately from windows.
+Whole-shape selection can leave a tile below its continuous LP minimum.
 
 A window whose requested minimum exceeds its candidate capacity requires all
 available candidate area instead. The command reports how many lower bounds
@@ -122,7 +137,10 @@ The schema for the `json` is:
 
 The optional `stagger` setting is the string `"ON"` or `"OFF"`, with `"OFF"`
 as the default. `"ON"` requires `stagger_offset` to be an array of two finite
-signed distances **in microns**, not fractions of the fill pitch. For example:
+signed distances **in microns**, not fractions of the fill pitch. At most one
+component may be nonzero: use `[x, 0]` for X stagger or `[0, y]` for Y stagger.
+Specifying nonzero offsets on both axes is an error, including when stagger is
+OFF. For example:
 
 ```json
 "non-opc": {
@@ -145,10 +163,9 @@ logical row `r` and column `c`, shape width `w`, height `h`, and fill spacings
 
 The origin is the fill area's lower-left corner for `density_fill`, and the
 core lower-left corner for `lp_fill`. It is shared across polygons and LP tiles.
-The same physical offsets apply to every configured shape size. With both
-components nonzero, shifted sites that violate fill spacing are omitted;
-this can reduce candidate capacity. All shapes remain inside their fillable
-regions. Uniform selection uses the logical, unshifted lattice for adjacency.
+The same physical offset applies to every configured shape size. All shapes
+remain inside their fillable regions. Selection follows candidate generation
+order for both staggered and non-staggered patterns.
 
 An omitted `stagger` setting or explicit `"OFF"` preserves the existing
 polygon-local grid. Offsets provided with `"OFF"` are validated but do not move

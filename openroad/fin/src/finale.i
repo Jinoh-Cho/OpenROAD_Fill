@@ -38,7 +38,8 @@ lp_fill_cmd(const char* rules_filename,
             double step_y,
             double min_density,
             double max_density,
-            const char* placement_strategy)
+            double min_tile_density,
+            double max_tile_density)
 {
   fin::LPFillOptions options;
   options.rules_file = rules_filename;
@@ -52,7 +53,8 @@ lp_fill_cmd(const char* rules_filename,
   options.step_y = step_y;
   options.min_density = min_density;
   options.max_density = max_density;
-  options.placement_strategy = placement_strategy;
+  options.min_tile_density = min_tile_density;
+  options.max_tile_density = max_tile_density;
   ord::OpenRoad::openRoad()->getFinale()->lpFill(options);
 }
 

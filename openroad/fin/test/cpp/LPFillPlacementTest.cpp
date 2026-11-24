@@ -7,7 +7,6 @@
 #include <iterator>
 #include <stdexcept>
 #include <string>
-#include <tuple>
 #include <vector>
 
 #include "FillCheck.h"
@@ -21,9 +20,8 @@
 
 namespace fin {
 namespace {
-class FillPlacementTest
-    : public tst::DbFixture,
-      public testing::WithParamInterface<std::tuple<std::string, std::string>>
+class FillPlacementTest : public tst::DbFixture,
+                          public testing::WithParamInterface<std::string>
 {
  protected:
   void SetUp() override
@@ -73,8 +71,7 @@ class FillPlacementTest
   {
     LPFillOptions result;
     result.rules_file = rules_.string();
-    result.objective = std::get<0>(GetParam());
-    result.placement_strategy = std::get<1>(GetParam());
+    result.objective = GetParam();
     result.window_width = 20;
     result.window_height = 20;
     result.step_x = 10;
@@ -213,11 +210,14 @@ TEST_P(FillPlacementTest, StaggerRulesUseMicronsAndDefaultToOff)
 {
   auto layers = loadFillRules(rules_.string().c_str(), tech_, getLogger());
   EXPECT_FALSE(layers.at(layer_).non_opc.stagger);
-  setStaggerRules(R"("stagger":"ON","stagger_offset":[1.25,-0.5])");
+  setStaggerRules(R"("stagger":"ON","stagger_offset":[1.25,0])");
   layers = loadFillRules(rules_.string().c_str(), tech_, getLogger());
   EXPECT_TRUE(layers.at(layer_).non_opc.stagger);
-  EXPECT_EQ(layers.at(layer_).non_opc.stagger_offset, odb::Point(1250, -500));
-  setStaggerRules(R"("stagger":"OFF","stagger_offset":[1.25,-0.5])");
+  EXPECT_EQ(layers.at(layer_).non_opc.stagger_offset, odb::Point(1250, 0));
+  setStaggerRules(R"("stagger":"ON","stagger_offset":[0,-0.5])");
+  layers = loadFillRules(rules_.string().c_str(), tech_, getLogger());
+  EXPECT_EQ(layers.at(layer_).non_opc.stagger_offset, odb::Point(0, -500));
+  setStaggerRules(R"("stagger":"OFF","stagger_offset":[0,-0.5])");
   layers = loadFillRules(rules_.string().c_str(), tech_, getLogger());
   EXPECT_FALSE(layers.at(layer_).non_opc.stagger);
 }
@@ -231,6 +231,10 @@ TEST_P(FillPlacementTest, RejectsInvalidStaggerRulesBeforeInsertingFill)
         R"("stagger":"ON","stagger_offset":[1])",
         R"("stagger":"ON","stagger_offset":[1,2,3])",
         R"("stagger":"ON","stagger_offset":{"x":1,"y":0})",
+        R"("stagger":"ON","stagger_offset":[1,1])",
+        R"("stagger":"ON","stagger_offset":[1,-1])",
+        R"("stagger":"OFF","stagger_offset":[1,1])",
+        R"("stagger":"ON","stagger_offset":[0.00001,1])",
         R"("stagger":"ON","stagger_offset":[0,1e100])"}) {
     setStaggerRules(fields);
     LPFill filler(getDb(), getLogger());
@@ -239,35 +243,44 @@ TEST_P(FillPlacementTest, RejectsInvalidStaggerRulesBeforeInsertingFill)
   }
 }
 
-TEST_P(FillPlacementTest, TwoAxisStaggerProducesLegalTileContainedFill)
+TEST_P(FillPlacementTest, SingleAxisStaggerProducesLegalTileContainedFill)
 {
-  setStaggerRules(R"("stagger":"ON","stagger_offset":[0.5,0.4])");
-  LPFill filler(getDb(), getLogger());
-  ASSERT_NO_THROW(filler.fill(options()));
-  ASSERT_FALSE(block_->getFills().empty());
-  std::vector<odb::Rect> fills;
-  Polygon90Set area;
-  double sum = 0.0;
-  for (auto* fill : block_->getFills()) {
-    odb::Rect rect;
-    fill->getRect(rect);
-    for (const auto& other : fills) {
-      EXPECT_TRUE(int64_t{rect.xMax()} + 300 <= other.xMin()
-                  || int64_t{other.xMax()} + 300 <= rect.xMin()
-                  || int64_t{rect.yMax()} + 300 <= other.yMin()
-                  || int64_t{other.yMax()} + 300 <= rect.yMin());
+  for (const std::string& fields :
+       {R"("stagger":"ON","stagger_offset":[0.5,0])",
+        R"("stagger":"ON","stagger_offset":[0,0.4])"}) {
+    setStaggerRules(fields);
+    LPFill filler(getDb(), getLogger());
+    ASSERT_NO_THROW(filler.fill(options()));
+    ASSERT_FALSE(block_->getFills().empty());
+    std::vector<odb::Rect> fills;
+    Polygon90Set area;
+    double sum = 0.0;
+    for (auto* fill : block_->getFills()) {
+      odb::Rect rect;
+      fill->getRect(rect);
+      for (const auto& other : fills) {
+        EXPECT_TRUE(int64_t{rect.xMax()} + 300 <= other.xMin()
+                    || int64_t{other.xMax()} + 300 <= rect.xMin()
+                    || int64_t{rect.yMax()} + 300 <= other.yMin()
+                    || int64_t{other.yMax()} + 300 <= rect.yMin());
+      }
+      fills.push_back(rect);
+      area.insert(
+          Rectangle(rect.xMin(), rect.yMin(), rect.xMax(), rect.yMax()));
+      sum += rect.area();
     }
-    fills.push_back(rect);
-    area.insert(Rectangle(rect.xMin(), rect.yMin(), rect.xMax(), rect.yMax()));
-    sum += rect.area();
+    EXPECT_DOUBLE_EQ(boost::polygon::area(area), sum);
+    const auto all_fills = block_->getFills();
+    const std::vector<odb::dbFill*> placed_fills(all_fills.begin(),
+                                                 all_fills.end());
+    for (auto* fill : placed_fills) {
+      odb::dbFill::destroy(fill);
+    }
   }
-  EXPECT_DOUBLE_EQ(boost::polygon::area(area), sum);
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    BothObjectivesAndStrategies,
-    FillPlacementTest,
-    testing::Combine(testing::Values("min_fill", "min_var"),
-                     testing::Values("sequential", "uniform")));
+INSTANTIATE_TEST_SUITE_P(BothObjectives,
+                         FillPlacementTest,
+                         testing::Values("min_fill", "min_var"));
 }  // namespace
 }  // namespace fin

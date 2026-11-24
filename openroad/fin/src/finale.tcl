@@ -46,13 +46,15 @@ sta::define_cmd_args "lp_fill" {
   [-num_threads threads]
   [-min_density density]
   [-max_density density]
-  [-placement_strategy sequential|uniform]
+  [-min_tile_density density]
+  [-max_tile_density density]
 }
 
 proc lp_fill { args } {
   sta::parse_key_args "lp_fill" args \
     keys {-rules -objective -solver -solver_threads -num_threads
-      -window_size -window_step -min_density -max_density -placement_strategy} flags {}
+      -window_size -window_step -min_density -max_density
+      -min_tile_density -max_tile_density} flags {}
   sta::check_argc_eq0 "lp_fill" $args
 
   foreach key {-rules -objective -window_size -window_step} {
@@ -67,7 +69,8 @@ proc lp_fill { args } {
   }
   foreach {key value} {
     -solver glop -solver_threads 1 -num_threads 1
-    -min_density 0.20 -max_density 0.70 -placement_strategy sequential
+    -min_density 0.20 -max_density 0.70
+    -min_tile_density 0.0 -max_tile_density 1.0
   } {
     if { ![info exists keys($key)] } {
       set keys($key) $value
@@ -78,5 +81,6 @@ proc lp_fill { args } {
   fin::lp_fill_cmd $keys(-rules) $keys(-objective) $keys(-solver) \
     $keys(-solver_threads) $keys(-num_threads) \
     $width $height $step_x $step_y \
-    $keys(-min_density) $keys(-max_density) $keys(-placement_strategy)
+    $keys(-min_density) $keys(-max_density) \
+    $keys(-min_tile_density) $keys(-max_tile_density)
 }

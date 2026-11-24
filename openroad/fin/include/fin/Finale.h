@@ -24,7 +24,8 @@ struct LPFillOptions
   double step_y = 12.5;
   double min_density = 0.2;
   double max_density = 0.7;
-  std::string placement_strategy = "sequential";
+  double min_tile_density = 0.0;
+  double max_tile_density = 1.0;
 };
 
 class Finale

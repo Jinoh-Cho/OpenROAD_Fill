@@ -63,14 +63,10 @@ Polygon90Set makeFillPattern(const Rectangle& bounds,
 std::vector<Rectangle> makeFillCandidates(const Polygon90Set& area,
                                           odb::dbTechLayer* layer,
                                           const FillShapesConfig& config);
-// Selects whole rectangles without exceeding the continuous area budget.
+// Selects whole rectangles in candidate order without exceeding the LP budget.
 std::vector<Rectangle> selectFillCandidates(
     const std::vector<Rectangle>& candidates,
-    double target_area,
-    bool uniform,
-    int space_x,
-    int space_y,
-    const FillShapesConfig& config = {});
+    double target_area);
 
 double rectangleArea(const Rectangle& rectangle);
 // Each task owns its geometry; exceptions are rethrown after workers join.

@@ -77,6 +77,31 @@ void validateProblem(const FillLPProblem& problem)
   }
 }
 
+MPVariable* makeTileFillVariable(MPSolver& solver,
+                                 const FillLPProblem& problem,
+                                 const size_t tile,
+                                 const LPFillOptions& options,
+                                 const double scale,
+                                 FillLPSolution& solution)
+{
+  const double requested
+      = std::max(options.min_tile_density * problem.tile_areas[tile]
+                     - problem.metal_areas[tile],
+                 0.0);
+  const double lower = std::min(requested, problem.capacities[tile]);
+  double upper = problem.capacities[tile];
+  if (options.max_tile_density < 1.0) {
+    upper
+        = std::min(upper,
+                   std::max(options.max_tile_density * problem.tile_areas[tile]
+                                - problem.metal_areas[tile],
+                            0.0));
+  }
+  solution.relaxed_tiles += lower < requested;
+  return solver.MakeNumVar(
+      lower / scale, upper / scale, "fill_" + std::to_string(tile));
+}
+
 void addWindowConstraints(MPSolver& solver,
                           const FillLPProblem& problem,
                           const size_t window_index,
@@ -210,19 +235,12 @@ LayerCandidates prepareLayer(odb::dbBlock* block,
 
 std::vector<std::vector<Rectangle>> selectLayer(const LayerCandidates& layer,
                                                 const FillLPSolution& solution,
-                                                odb::dbTechLayer* tech_layer,
-                                                const FillShapesConfig& config,
                                                 const LPFillOptions& options)
 {
   std::vector<std::vector<Rectangle>> selected(layer.candidates.size());
-  const auto [space_x, space_y] = getSpacing(tech_layer, config);
   forEachFillTile(selected.size(), options.num_threads, [&](const size_t i) {
-    selected[i] = selectFillCandidates(layer.candidates[i],
-                                       solution.fill_areas[i],
-                                       options.placement_strategy == "uniform",
-                                       space_x,
-                                       space_y,
-                                       config);
+    selected[i]
+        = selectFillCandidates(layer.candidates[i], solution.fill_areas[i]);
   });
   return selected;
 }
@@ -280,6 +298,15 @@ void reportLayerFill(utl::Logger* logger,
                      const size_t window_count,
                      const LayerFillStatistics& statistics)
 {
+  if (solution.relaxed_tiles != 0) {
+    logger->warn(utl::FIN,
+                 19,
+                 "Layer {}: {} tile lower bounds are limited by candidate "
+                 "capacity; requested minimum tile density is {:.6f}.",
+                 layer->getConstName(),
+                 solution.relaxed_tiles,
+                 options.min_tile_density);
+  }
   if (solution.relaxed_windows != 0) {
     logger->warn(utl::FIN,
                  15,
@@ -341,11 +368,6 @@ void validateLPFillOptions(const LPFillOptions& options)
   if (options.solver != "glop" && options.solver != "pdlp") {
     throw std::invalid_argument("Solver must be glop or pdlp.");
   }
-  if (options.placement_strategy != "sequential"
-      && options.placement_strategy != "uniform") {
-    throw std::invalid_argument(
-        "Placement strategy must be sequential or uniform.");
-  }
   if (options.solver_threads < 1 || options.num_threads < 1) {
     throw std::invalid_argument("Thread counts must be positive.");
   }
@@ -363,6 +385,14 @@ void validateLPFillOptions(const LPFillOptions& options)
       || options.min_density > options.max_density) {
     throw std::invalid_argument(
         "Density bounds must satisfy 0 <= min_density <= max_density <= 1.");
+  }
+  if (!std::isfinite(options.min_tile_density)
+      || !std::isfinite(options.max_tile_density)
+      || options.min_tile_density < 0 || options.max_tile_density > 1
+      || options.min_tile_density > options.max_tile_density) {
+    throw std::invalid_argument(
+        "Tile density bounds must satisfy 0 <= min_tile_density <= "
+        "max_tile_density <= 1.");
   }
 }
 
@@ -384,15 +414,15 @@ FillLPSolution solveFillLP(const FillLPProblem& problem,
     }
   }
   const double scale = *std::ranges::max_element(problem.tile_areas);
+  FillLPSolution solution;
   std::vector<MPVariable*> fills;
   for (size_t i = 0; i < problem.tile_areas.size(); ++i) {
-    fills.push_back(solver->MakeNumVar(
-        0.0, problem.capacities[i] / scale, "fill_" + std::to_string(i)));
+    fills.push_back(
+        makeTileFillVariable(*solver, problem, i, options, scale, solution));
   }
   MPVariable* minimum = options.objective == "min_var"
                             ? solver->MakeNumVar(0.0, 1.0, "minimum_density")
                             : nullptr;
-  FillLPSolution solution;
   for (size_t i = 0; i < problem.windows.size(); ++i) {
     addWindowConstraints(
         *solver, problem, i, options, fills, minimum, scale, solution);
@@ -493,8 +523,7 @@ void LPFill::fillLayer(odb::dbBlock* block,
                    layer->getConstName(),
                    solution.status);
   }
-  const auto selected
-      = selectLayer(candidates, solution, layer, config.non_opc, options);
+  const auto selected = selectLayer(candidates, solution, options);
   const auto placed = insertLayerFills(block,
                                        layer,
                                        selected,
@@ -507,6 +536,28 @@ void LPFill::fillLayer(odb::dbBlock* block,
       = summarizeFillDensity(grid.windowDensities(placed.metal_areas),
                              options.min_density,
                              options.max_density);
+  if (options.min_tile_density > 0 || options.max_tile_density < 1) {
+    std::vector<double> densities;
+    densities.reserve(placed.metal_areas.size());
+    for (size_t i = 0; i < placed.metal_areas.size(); ++i) {
+      densities.push_back(placed.metal_areas[i]
+                          / candidates.problem.tile_areas[i]);
+    }
+    const auto tiles = summarizeFillDensity(
+        densities, options.min_tile_density, options.max_tile_density);
+    logger_->info(utl::FIN,
+                  20,
+                  "LP tile density: layer={}, requested_min={:.6f}, "
+                  "requested_max={:.6f}, density_min={:.6f}, "
+                  "density_max={:.6f}, below_minimum={}, above_maximum={}.",
+                  layer->getConstName(),
+                  options.min_tile_density,
+                  options.max_tile_density,
+                  tiles.minimum,
+                  tiles.maximum,
+                  tiles.below_minimum,
+                  tiles.above_maximum);
+  }
   const auto placed_time = Clock::now();
   const auto seconds = [](const auto from, const auto to) {
     return std::chrono::duration<double>(to - from).count();

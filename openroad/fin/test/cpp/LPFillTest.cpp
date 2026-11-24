@@ -98,12 +98,98 @@ TEST_P(FillLPTest, UnitScalingPreservesTheDensitySolution)
   }
 }
 
+TEST_P(FillLPTest, TileBoundsIncludeExistingMetal)
+{
+  for (const double scale : {1e-6, 1.0, 15625000.0}) {
+    const FillLPProblem problem{{10 * scale, 10 * scale},
+                                {0, 4 * scale},
+                                {10 * scale, 6 * scale},
+                                {{{}, {0, 1}}}};
+    auto config = options();
+    config.min_density = 0.0;
+    config.max_density = 1.0;
+    config.min_tile_density = 0.3;
+    config.max_tile_density = 0.6;
+    const auto result = solveFillLP(problem, config);
+    ASSERT_TRUE(result.solved) << result.status;
+    ASSERT_EQ(result.fill_areas.size(), 2);
+    EXPECT_NEAR(result.fill_areas[0] / scale,
+                config.objective == "min_fill" ? 3.0 : 6.0,
+                1e-4);
+    EXPECT_NEAR(result.fill_areas[1] / scale,
+                config.objective == "min_fill" ? 0.0 : 2.0,
+                1e-4);
+    EXPECT_EQ(result.relaxed_tiles, 0);
+  }
+}
+
+TEST_P(FillLPTest, TileMinimumRelaxesOnlyToCandidateCapacity)
+{
+  const FillLPProblem problem{{10, 10}, {0, 0}, {1, 10}, {{{}, {0, 1}}}};
+  auto config = options();
+  config.min_density = 0.0;
+  config.max_density = 1.0;
+  config.min_tile_density = 0.3;
+  const auto result = solveFillLP(problem, config);
+  ASSERT_TRUE(result.solved) << result.status;
+  ASSERT_EQ(result.fill_areas.size(), 2);
+  EXPECT_NEAR(result.fill_areas[0], 1.0, 1e-4);
+  EXPECT_GE(result.fill_areas[1], 3.0 - 1e-4);
+  EXPECT_EQ(result.relaxed_tiles, 1);
+}
+
+TEST_P(FillLPTest, TileAboveMaximumReceivesNoAdditionalFill)
+{
+  const FillLPProblem problem{{10, 10}, {9, 0}, {1, 10}, {{{}, {0, 1}}}};
+  auto config = options();
+  config.min_density = 0.0;
+  config.max_density = 1.0;
+  config.max_tile_density = 0.6;
+  const auto result = solveFillLP(problem, config);
+  ASSERT_TRUE(result.solved) << result.status;
+  ASSERT_EQ(result.fill_areas.size(), 2);
+  EXPECT_NEAR(result.fill_areas[0], 0.0, 1e-4);
+  EXPECT_LE(result.fill_areas[1], 6.0 + 1e-4);
+}
+
+TEST_P(FillLPTest, ConflictingWindowMinimumAndTileMaximumAreInfeasible)
+{
+  const FillLPProblem problem{{10, 10}, {0, 0}, {10, 10}, {{{}, {0, 1}}}};
+  auto config = options();
+  config.min_density = 0.8;
+  config.max_density = 1.0;
+  config.max_tile_density = 0.5;
+  const auto result = solveFillLP(problem, config);
+  EXPECT_FALSE(result.solved);
+  EXPECT_TRUE(result.fill_areas.empty());
+}
+
 INSTANTIATE_TEST_SUITE_P(BothSolversAndObjectives,
                          FillLPTest,
                          testing::Combine(testing::Values("min_fill",
                                                           "min_var"),
                                           testing::Values("glop", "pdlp"),
                                           testing::Values(1, 4)));
+
+TEST(FillLPOptionsTest, RejectsInvalidTileBounds)
+{
+  LPFillOptions options;
+  options.rules_file = "unused.json";
+  for (const double bad : {-1.0,
+                           1.1,
+                           std::numeric_limits<double>::infinity(),
+                           std::numeric_limits<double>::quiet_NaN()}) {
+    auto invalid = options;
+    invalid.min_tile_density = bad;
+    EXPECT_THROW(validateLPFillOptions(invalid), std::invalid_argument);
+    invalid = options;
+    invalid.max_tile_density = bad;
+    EXPECT_THROW(validateLPFillOptions(invalid), std::invalid_argument);
+  }
+  options.min_tile_density = 0.7;
+  options.max_tile_density = 0.5;
+  EXPECT_THROW(validateLPFillOptions(options), std::invalid_argument);
+}
 
 TEST(FillLPOptionsTest, RejectsInvalidOptions)
 {
@@ -127,9 +213,6 @@ TEST(FillLPOptionsTest, RejectsInvalidOptions)
     EXPECT_THROW(validateLPFillOptions(invalid), std::invalid_argument);
   }
   auto invalid = options;
-  invalid.placement_strategy = "greedy";
-  EXPECT_THROW(validateLPFillOptions(invalid), std::invalid_argument);
-  invalid = options;
   invalid.solver = "unknown";
   EXPECT_THROW(validateLPFillOptions(invalid), std::invalid_argument);
   invalid = options;
@@ -217,31 +300,31 @@ TEST(FillGridTest, RejectsInvalidGeometry)
       std::invalid_argument);
 }
 
-TEST(FillSelectionTest, BothStrategiesRespectAreaAndRetainCandidateOrder)
+TEST(FillSelectionTest, RespectsAreaAndRetainsCandidateOrder)
 {
-  std::vector<Rectangle> candidates;
-  for (int y = 0; y < 5; ++y) {
-    for (int x = 0; x < 5; ++x) {
-      candidates.emplace_back(x * 3, y * 3, x * 3 + 2, y * 3 + 2);
-    }
+  const std::vector<Rectangle> candidates{Rectangle(0, 0, 2, 2),
+                                          Rectangle(3, 0, 5, 2),
+                                          Rectangle(6, 0, 8, 2),
+                                          Rectangle(9, 0, 11, 2)};
+  const auto selected = selectFillCandidates(candidates, 13.0);
+  ASSERT_EQ(selected.size(), 3);
+  EXPECT_EQ(
+      selected,
+      (std::vector<Rectangle>(candidates.begin(), candidates.begin() + 3)));
+  EXPECT_TRUE(selectFillCandidates(candidates, 0.0).empty());
+}
+
+TEST(FillSelectionTest, SkipsShapesThatExceedRemainingBudget)
+{
+  const std::vector<Rectangle> candidates{
+      Rectangle(0, 0, 3, 2), Rectangle(4, 0, 5, 1), Rectangle(6, 0, 8, 2)};
+  const auto selected = selectFillCandidates(candidates, 5.0);
+  EXPECT_EQ(selected, (std::vector<Rectangle>{candidates[1], candidates[2]}));
+  for (const double bad : {-1.0,
+                           std::numeric_limits<double>::infinity(),
+                           std::numeric_limits<double>::quiet_NaN()}) {
+    EXPECT_THROW(selectFillCandidates(candidates, bad), std::invalid_argument);
   }
-  for (const bool uniform : {false, true}) {
-    const auto selected = selectFillCandidates(candidates, 13.0, uniform, 1, 1);
-    EXPECT_EQ(selected.size(), 3);
-    double area = 0;
-    for (const auto& rect : selected) {
-      area += rectangleArea(rect);
-      EXPECT_NE(std::find(candidates.begin(), candidates.end(), rect),
-                candidates.end());
-    }
-    EXPECT_LE(area, 13.0);
-  }
-  const auto sequential = selectFillCandidates(candidates, 4.0, false, 1, 1);
-  const auto uniform = selectFillCandidates(candidates, 4.0, true, 1, 1);
-  ASSERT_EQ(sequential.size(), 1);
-  ASSERT_EQ(uniform.size(), 1);
-  EXPECT_NE(sequential[0], uniform[0]);
-  EXPECT_EQ(uniform[0], Rectangle(6, 6, 8, 8));
 }
 
 TEST(FillPatternTest, AlternatesRowsByTheSpecifiedPhysicalXOffset)
@@ -284,29 +367,17 @@ TEST(FillPatternTest, AlternatesColumnsByTheSpecifiedPhysicalYOffset)
   }
 }
 
-TEST(FillPatternTest, TwoAxisOffsetsPreserveSpacingAndShapeDimensions)
+TEST(FillPatternTest, RejectsSimultaneousXAndYOffsets)
 {
   FillShapesConfig config;
   config.stagger = true;
   config.stagger_offset = odb::Point(6, 6);
-  const auto pattern
-      = makeFillPattern(Rectangle(-48, -48, 48, 48), 10, 10, 2, 2, config);
-  std::vector<Rectangle> sites;
-  pattern.get_rectangles(sites);
-  ASSERT_FALSE(sites.empty());
-  for (size_t i = 0; i < sites.size(); ++i) {
-    EXPECT_EQ(xh(sites[i]) - xl(sites[i]), 10);
-    EXPECT_EQ(yh(sites[i]) - yl(sites[i]), 10);
-    for (size_t j = 0; j < i; ++j) {
-      EXPECT_TRUE(xh(sites[i]) + 2 <= xl(sites[j])
-                  || xh(sites[j]) + 2 <= xl(sites[i])
-                  || yh(sites[i]) + 2 <= yl(sites[j])
-                  || yh(sites[j]) + 2 <= yl(sites[i]));
-    }
-  }
+  EXPECT_THROW(
+      makeFillPattern(Rectangle(-48, -48, 48, 48), 10, 10, 2, 2, config),
+      std::invalid_argument);
 }
 
-TEST(FillPatternTest, UniformSelectionUsesLogicalStaggerNeighbors)
+TEST(FillPatternTest, SequentialSelectionRetainsStaggerCandidateOrder)
 {
   FillShapesConfig config;
   config.stagger = true;
@@ -316,9 +387,9 @@ TEST(FillPatternTest, UniformSelectionUsesLogicalStaggerNeighbors)
   std::vector<Rectangle> sites;
   pattern.get_rectangles(sites);
   ASSERT_EQ(sites.size(), 25);
-  const auto selected = selectFillCandidates(sites, 100, true, 2, 2, config);
+  const auto selected = selectFillCandidates(sites, 100);
   ASSERT_EQ(selected.size(), 1);
-  EXPECT_EQ(selected[0], Rectangle(24, 24, 34, 34));
+  EXPECT_EQ(selected[0], sites.front());
 }
 
 TEST(FillThreadTest, PropagatesWorkerExceptions)

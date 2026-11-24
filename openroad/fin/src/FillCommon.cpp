@@ -7,15 +7,11 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <exception>
 #include <functional>
 #include <limits>
-#include <map>
-#include <set>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -250,55 +246,6 @@ std::vector<Rectangle> staggerSites(const Rectangle& bounds,
   return result;
 }
 
-using PatternCell = std::pair<int64_t, int64_t>;
-struct PatternCellHash
-{
-  size_t operator()(const PatternCell& cell) const
-  {
-    const auto first = std::hash<int64_t>{}(cell.first);
-    const auto second = std::hash<int64_t>{}(cell.second);
-    return first ^ (second + 0x9e3779b9 + (first << 6) + (first >> 2));
-  }
-};
-
-// Moving along both axes can bring diagonal neighbors too close. Filter in
-// physical row order so capacity contains only mutually legal candidates.
-Polygon90Set spacedStaggerSites(std::vector<Rectangle>& sites,
-                                const int64_t pitch_x,
-                                const int64_t pitch_y)
-{
-  std::ranges::sort(sites, {}, [](const Rectangle& rect) {
-    return std::pair{yl(rect), xl(rect)};
-  });
-  std::unordered_map<PatternCell, std::vector<Rectangle>, PatternCellHash>
-      buckets;
-  Polygon90Set result;
-  for (const auto& rect : sites) {
-    const PatternCell cell{floorDivide(xl(rect), pitch_x),
-                           floorDivide(yl(rect), pitch_y)};
-    bool conflict = false;
-    for (int dy = -1; dy <= 1 && !conflict; ++dy) {
-      for (int dx = -1; dx <= 1 && !conflict; ++dx) {
-        const auto it = buckets.find({cell.first + dx, cell.second + dy});
-        if (it == buckets.end()) {
-          continue;
-        }
-        for (const auto& other : it->second) {
-          if (std::abs(int64_t{xl(rect)} - xl(other)) < pitch_x
-              && std::abs(int64_t{yl(rect)} - yl(other)) < pitch_y) {
-            conflict = true;
-            break;
-          }
-        }
-      }
-    }
-    if (!conflict) {
-      buckets[cell].push_back(rect);
-      result.insert(rect);
-    }
-  }
-  return result;
-}
 }  // namespace
 
 Polygon90Set makeFillPattern(const Rectangle& bounds,
@@ -311,6 +258,11 @@ Polygon90Set makeFillPattern(const Rectangle& bounds,
   if (width <= 0 || height <= 0 || space_x < 0 || space_y < 0) {
     throw std::invalid_argument(
         "Fill pattern requires positive sizes and nonnegative spacing.");
+  }
+  if (config.stagger && config.stagger_offset.x() != 0
+      && config.stagger_offset.y() != 0) {
+    throw std::invalid_argument(
+        "stagger_offset must select only one axis: [x, 0] or [0, y].");
   }
   const int64_t pitch_x = int64_t{width} + space_x;
   const int64_t pitch_y = int64_t{height} + space_y;
@@ -329,9 +281,6 @@ Polygon90Set makeFillPattern(const Rectangle& bounds,
     return result;
   }
   auto sites = staggerSites(bounds, width, height, pitch_x, pitch_y, config);
-  if (config.stagger_offset.x() != 0 && config.stagger_offset.y() != 0) {
-    return spacedStaggerSites(sites, pitch_x, pitch_y);
-  }
   for (const auto& rect : sites) {
     result.insert(rect);
   }
@@ -395,19 +344,26 @@ void readStagger(const pt::ptree& tree, const int dbu, FillShapesConfig& config)
         "stagger_offset must be an array of two distances in microns.");
   }
   std::array<int, 2> values{};
+  std::array<bool, 2> nonzero{};
   size_t index = 0;
   for (const auto& [name, value] : *offset) {
     if (!name.empty() || !value.empty()) {
       throw std::invalid_argument(
           "stagger_offset must contain two numeric distances.");
     }
-    const double distance = std::round(value.get_value<double>() * dbu);
+    const double offset_um = value.get_value<double>();
+    nonzero[index] = offset_um != 0.0;
+    const double distance = std::round(offset_um * dbu);
     if (!std::isfinite(distance) || distance < std::numeric_limits<int>::min()
         || distance > std::numeric_limits<int>::max()) {
       throw std::invalid_argument(
           "stagger_offset must be finite and representable in DBU.");
     }
     values[index++] = static_cast<int>(distance);
+  }
+  if (nonzero[0] && nonzero[1]) {
+    throw std::invalid_argument(
+        "stagger_offset must select only one axis: [x, 0] or [0, y].");
   }
   config.stagger_offset = odb::Point(values[0], values[1]);
 }
@@ -534,193 +490,26 @@ double rectangleArea(const Rectangle& rectangle)
   return (static_cast<double>(xh(rectangle)) - xl(rectangle))
          * (static_cast<double>(yh(rectangle)) - yl(rectangle));
 }
-namespace {
-using Site = std::pair<int64_t, int64_t>;
-struct UniformEntry
-{
-  size_t index;
-  Site site;
-};
-struct UniformGroup
-{
-  std::vector<UniformEntry> entries;
-  int64_t min_x = std::numeric_limits<int64_t>::max();
-  int64_t min_y = std::numeric_limits<int64_t>::max();
-  int64_t max_x = std::numeric_limits<int64_t>::min();
-  int64_t max_y = std::numeric_limits<int64_t>::min();
-};
-
-int64_t positiveRemainder(const int64_t value, const int64_t pitch)
-{
-  const int64_t remainder = value % pitch;
-  return remainder < 0 ? remainder + pitch : remainder;
-}
-
-// Recover logical row/column coordinates before uniform's bitmap adjacency.
-// Four parity classes allow signed offsets and negative layout coordinates.
-Site logicalPatternPosition(const Rectangle& rect,
-                            const int64_t pitch_x,
-                            const int64_t pitch_y,
-                            const FillShapesConfig& config)
-{
-  if (!config.stagger) {
-    return {xl(rect), yl(rect)};
-  }
-  for (int row_parity = 0; row_parity < 2; ++row_parity) {
-    for (int col_parity = 0; col_parity < 2; ++col_parity) {
-      const int64_t x = int64_t{xl(rect)} - config.pattern_origin.x()
-                        - int64_t{row_parity} * config.stagger_offset.x();
-      const int64_t y = int64_t{yl(rect)} - config.pattern_origin.y()
-                        - int64_t{col_parity} * config.stagger_offset.y();
-      if (x % pitch_x == 0 && y % pitch_y == 0
-          && positiveRemainder(x / pitch_x, 2) == col_parity
-          && positiveRemainder(y / pitch_y, 2) == row_parity) {
-        return {int64_t{config.pattern_origin.x()} + x,
-                int64_t{config.pattern_origin.y()} + y};
-      }
-    }
-  }
-  throw std::invalid_argument(
-      "Candidate does not lie on the configured stagger lattice.");
-}
-
-std::vector<UniformGroup> groupCandidates(
-    const std::vector<Rectangle>& candidates,
-    const int space_x,
-    const int space_y,
-    const FillShapesConfig& config)
-{
-  std::map<std::array<int64_t, 4>, size_t> ids;
-  std::vector<UniformGroup> groups;
-  for (size_t i = 0; i < candidates.size(); ++i) {
-    const auto& rect = candidates[i];
-    const int64_t width = int64_t{xh(rect)} - xl(rect);
-    const int64_t height = int64_t{yh(rect)} - yl(rect);
-    const int64_t pitch_x = width + space_x;
-    const int64_t pitch_y = height + space_y;
-    const auto logical = logicalPatternPosition(rect, pitch_x, pitch_y, config);
-    const int64_t rx = positiveRemainder(logical.first, pitch_x);
-    const int64_t ry = positiveRemainder(logical.second, pitch_y);
-    const auto [it, inserted] = ids.emplace(
-        std::array<int64_t, 4>{width, height, rx, ry}, groups.size());
-    if (inserted) {
-      groups.emplace_back();
-    }
-    auto& group = groups[it->second];
-    const Site site{(logical.first - rx) / pitch_x,
-                    (logical.second - ry) / pitch_y};
-    group.entries.push_back({i, site});
-    group.min_x = std::min(group.min_x, site.first);
-    group.min_y = std::min(group.min_y, site.second);
-    group.max_x = std::max(group.max_x, site.first);
-    group.max_y = std::max(group.max_y, site.second);
-  }
-  return groups;
-}
-
-using UniformBands = std::array<std::vector<size_t>, 12>;
-
-// Two eight-neighbor erosions prioritize interior sites, then sparse parity
-// classes. A bounded bitmap avoids hashing densely populated candidate grids.
-UniformBands uniformBands(const UniformGroup& group)
-{
-  const uint64_t columns = group.max_x - group.min_x + 5;
-  const uint64_t rows = group.max_y - group.min_y + 5;
-  constexpr uint64_t max_cells = 1024 * 1024;
-  const bool dense = columns <= max_cells && rows <= max_cells / columns
-                     && columns * rows <= 8 * group.entries.size() + 64;
-  std::vector<uint8_t> bitmap;
-  std::set<Site> sites;
-  if (dense) {
-    bitmap.resize(columns * rows, 0);
-  }
-  for (const auto& entry : group.entries) {
-    if (dense) {
-      bitmap[(entry.site.second - group.min_y + 2) * columns + entry.site.first
-             - group.min_x + 2] = 1;
-    } else {
-      sites.insert(entry.site);
-    }
-  }
-  const auto contains = [&](const Site& site) {
-    if (dense) {
-      const int64_t x = site.first - group.min_x + 2;
-      const int64_t y = site.second - group.min_y + 2;
-      return x >= 0 && y >= 0 && x < static_cast<int64_t>(columns)
-             && y < static_cast<int64_t>(rows) && bitmap[y * columns + x] != 0;
-    }
-    return sites.contains(site);
-  };
-  UniformBands bands;
-  auto entries = group.entries;
-  std::ranges::sort(entries, {}, [](const UniformEntry& entry) {
-    return std::pair{entry.site.second, entry.site.first};
-  });
-  for (const auto& entry : entries) {
-    int depth = 0;
-    for (int radius = 1; radius <= 2; ++radius) {
-      bool interior = true;
-      for (int dy = -radius; dy <= radius; ++dy) {
-        for (int dx = -radius; dx <= radius; ++dx) {
-          interior &= contains({entry.site.first + dx, entry.site.second + dy});
-        }
-      }
-      if (!interior) {
-        break;
-      }
-      depth = radius;
-    }
-    const int parity = ((entry.site.first - group.min_x) % 2) * 2
-                       + (entry.site.second - group.min_y) % 2;
-    bands[(2 - depth) * 4 + parity].push_back(entry.index);
-  }
-  return bands;
-}
-}  // namespace
-
+// Candidates already satisfy spacing; selection only enforces the LP budget.
 std::vector<Rectangle> selectFillCandidates(
     const std::vector<Rectangle>& candidates,
-    const double target_area,
-    const bool uniform,
-    const int space_x,
-    const int space_y,
-    const FillShapesConfig& config)
+    const double target_area)
 {
-  if (!std::isfinite(target_area) || target_area < 0 || space_x < 0
-      || space_y < 0) {
-    throw std::invalid_argument("Invalid fill selection budget or spacing.");
-  }
-  std::vector<bool> chosen(candidates.size(), false);
-  double placed = 0.0;
-  const auto choose = [&](const size_t index) {
-    const double area = rectangleArea(candidates[index]);
-    if (placed + area <= target_area) {
-      chosen[index] = true;
-      placed += area;
-    }
-  };
-  if (uniform) {
-    for (const auto& group :
-         groupCandidates(candidates, space_x, space_y, config)) {
-      for (const auto& band : uniformBands(group)) {
-        for (const size_t index : band) {
-          choose(index);
-        }
-      }
-    }
-  } else {
-    for (size_t i = 0; i < candidates.size(); ++i) {
-      choose(i);
-    }
+  if (!std::isfinite(target_area) || target_area < 0) {
+    throw std::invalid_argument("Invalid fill selection budget.");
   }
   std::vector<Rectangle> selected;
-  for (size_t i = 0; i < candidates.size(); ++i) {
-    if (chosen[i]) {
-      selected.push_back(candidates[i]);
+  double placed = 0.0;
+  for (const auto& candidate : candidates) {
+    const double area = rectangleArea(candidate);
+    if (placed + area <= target_area) {
+      selected.push_back(candidate);
+      placed += area;
     }
   }
   return selected;
 }
+
 void forEachFillTile(const size_t count,
                      const int num_threads,
                      const std::function<void(size_t)>& task)
