@@ -17,7 +17,7 @@ This command performs density fill to meet metal density DRC rules.
 
 ```tcl
 density_fill
-    [-rules rules_file]
+    -rules rules_file
     [-area {lx ly ux uy}]
 ```
 
@@ -32,6 +32,9 @@ density_fill
 
 Optimize metal fill using a continuous linear program and place whole fill
 rectangles from the same JSON rule format used by `density_fill`.
+
+The LP Fill implementation was developed with reference to [1] and [2],
+particularly their LP formulations and layout density control objectives.
 
 ```tcl
 lp_fill
@@ -160,6 +163,26 @@ Simply run the following command:
 ```shell
 bazelisk test //openroad/fin/...
 ```
+
+## Authors
+
+The LP-based fill insertion implementation and stagger option were developed
+by [Jinoh Cho](https://jinoh-cho.github.io/)
+([jinoma@postech.ac.kr](mailto:jinoma@postech.ac.kr)), a Ph.D. Candidate in [CSDL Lab](https://csdl.postech.ac.kr/) (under [Prof. Seokhyeong Kang](https://csdl.postech.ac.kr/bbs/board.php?bo_table=sub3_1)) at
+POSTECH (Pohang University of Science and Technology), during his visiting graduate scholar appointment with [UCSD ABKGroup (UCSD VLSI CAD Lab.)](https://vlsicad.ucsd.edu/) at UC San Diego, under the guidance of
+[Prof. Andrew B. Kahng](https://vlsicad.ucsd.edu/~abk/).
+
+## References
+
+[1] A. B. Kahng, G. Robins, A. Singh, and A. Zelikovsky,
+"[Filling Algorithms and Analyses for Layout Density Control](https://vlsicad.ucsd.edu/Publications/Journals/j40.pdf),"
+*IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems
+(TCAD)*, vol. 18, no. 4, pp. 445–462, 1999.
+
+[2] Y. Chen, A. B. Kahng, G. Robins, and A. Zelikovsky,
+"[Practical Iterated Fill Synthesis for CMP Uniformity](https://www.cs.virginia.edu/~robins/papers/dac2000_camera.pdf),"
+in *Proceedings of the ACM/IEEE Design Automation Conference (DAC)*,
+pp. 671–674, 2000.
 
 ## License
 
