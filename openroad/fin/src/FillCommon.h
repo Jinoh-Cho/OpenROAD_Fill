@@ -43,7 +43,6 @@ FillLayerConfigs loadFillRules(const char* filename,
                                odb::dbTech* tech,
                                utl::Logger* logger);
 Polygon90 makeRect(int x_lo, int y_lo, int x_hi, int y_hi);
-// Collect wire, instance pin/OBS, and optionally fill-obstruction geometry.
 Polygon90Set collectNonFillShapes(odb::dbBlock* block,
                                   odb::dbTechLayer* layer,
                                   bool include_fill_obstructions = true);
@@ -52,26 +51,22 @@ std::pair<int, int> getSpacing(odb::dbTechLayer* layer,
 void pruneFillArea(Polygon90Set& area,
                    odb::dbTechLayer* layer,
                    const FillShapesConfig& config);
-// Stagger offsets and origin are in DBU. Conflicting shifted sites are omitted.
 Polygon90Set makeFillPattern(const Rectangle& bounds,
                              int width,
                              int height,
                              int space_x,
                              int space_y,
                              const FillShapesConfig& config);
-// Candidates are mutually spaced, non-overlapping rectangles in shape order.
 std::vector<Rectangle> makeFillCandidates(const Polygon90Set& area,
                                           odb::dbTechLayer* layer,
                                           const FillShapesConfig& config);
-// Selects whole rectangles in candidate order without exceeding the LP budget.
 std::vector<Rectangle> selectFillCandidates(
     const std::vector<Rectangle>& candidates,
     double target_area);
 
 double rectangleArea(const Rectangle& rectangle);
-// Each task owns its geometry; exceptions are rethrown after workers join.
 void forEachFillTile(size_t count,
                      int num_threads,
                      const std::function<void(size_t)>& task);
 
-}  // namespace fin
+}

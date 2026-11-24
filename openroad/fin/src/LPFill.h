@@ -15,7 +15,6 @@
 
 namespace fin {
 
-// Numeric LP input is independent of the database and rectangle placement.
 struct FillLPProblem
 {
   std::vector<double> tile_areas;
@@ -65,4 +64,4 @@ class LPFill
   utl::Logger* logger_;
 };
 
-}  // namespace fin
+}

@@ -30,8 +30,7 @@ density_fill
 
 ### LP Fill
 
-Optimize metal fill using a continuous linear program and place whole fill
-rectangles from the same JSON rule format used by `density_fill`.
+Optimize metal fill using a linear program (LP) and place fill rectangles to achieve the window density targets determined by the LP, using the same JSON rule format as `density_fill`.
 
 The LP Fill implementation was developed with reference to [1] and [2],
 particularly their LP formulations and layout density control objectives.
@@ -56,7 +55,7 @@ lp_fill
 | Switch Name | Description |
 | ----- | ----- |
 | `-rules` | Required JSON fill rule file. LP fill currently supports non-OPC rules only. |
-| `-objective` | Required. `min_fill` minimizes total fill area; `min_var` maximizes the minimum window density (the J40 max-min LP), rather than minimizing statistical variance. |
+| `-objective` | Required. `min_fill` minimizes total fill area; `min_var` maximizes the minimum window density [1], rather than minimizing statistical variance. |
 | `-window_size` | Required. window width and height for density check, in microns.|
 | `-window_step` | Required. Horizontal and vertical step ratios relative to window width and height, respectively. Each ratio is in `(0, 1]`; `0.25` means 25% of the corresponding window dimension. |
 | `-solver` | `glop` (default) or `pdlp`, both open-source OR-Tools LP solvers. |
@@ -78,6 +77,14 @@ For example, a 50 × 50 µm window with step ratios of 0.25 × 0.25 produces 12.
 Each LP variable represents the fill area to be added to one tile.
 Without tile density bounds, fill may concentrate in certain tiles while still satisfying the window density constraints.
 Specifying minimum and maximum tile densities helps control this local concentration.
+
+Each processed layer reports window densities before and after fill
+insertion: minimum, maximum, mean, range in percentage points, and counts below
+or above the requested density bounds. The mean is the arithmetic average of
+window densities. The report uses actual placed rectangles, including
+existing metal. Reported violations use the original requested bounds, even
+when LP lower bounds were relaxed due to insufficient candidate capacity.
+Whole-shape placement may also leave density below a continuous LP target.
 
 ## Example scripts
 

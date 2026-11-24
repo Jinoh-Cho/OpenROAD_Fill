@@ -122,8 +122,6 @@ void addWindowConstraints(MPSolver& solver,
   }
   const double requested = std::max(options.min_density * area - metal, 0.0);
   const double lower = std::min(requested, capacity);
-  // Existing metal cannot be removed; retain the established policy of omitting
-  // an upper bound that is already exceeded before inserting new fill.
   const double upper = metal > options.max_density * area
                            ? solver.infinity()
                            : (options.max_density * area - metal) / scale;
@@ -204,8 +202,6 @@ LayerCandidates prepareLayer(odb::dbBlock* block,
           makeRect(box->xMin(), box->yMin(), box->xMax(), box->yMax()));
     }
   }
-  // Expand before partitioning so obstacles on either side of a tile boundary
-  // retain the full spacing halo in all affected tiles.
   blocked = blocked + config.space_to_non_fill;
   rectangles.clear();
   blocked.get_rectangles(rectangles);
@@ -220,7 +216,6 @@ LayerCandidates prepareLayer(odb::dbBlock* block,
     const auto& tile = grid.tiles()[i];
     Polygon90Set area;
     area.insert(makeRect(tile.xMin(), tile.yMin(), tile.xMax(), tile.yMax()));
-    // Independent tile placement uses conservative spacing on both sides.
     shrink(area, space_x, space_x, space_y, space_y);
     area -= obstacles[i];
     pruneFillArea(area, layer, config);
@@ -291,6 +286,40 @@ struct LayerFillStatistics
   double placement_seconds;
 };
 
+void reportWindowDensity(utl::Logger* logger,
+                         odb::dbTechLayer* layer,
+                         const size_t count,
+                         const double minimum,
+                         const double maximum,
+                         const FillDensitySummary& before,
+                         const FillDensitySummary& after)
+{
+  logger->info(utl::FIN,
+               22,
+               "LP density: layer={}, scope=window, count={}, "
+               "requested=[{:.4f}%, {:.4f}%].",
+               layer->getConstName(),
+               count,
+               minimum * 100,
+               maximum * 100);
+  const auto report
+      = [&](const char* phase, const FillDensitySummary& summary) {
+          logger->info(utl::FIN,
+                       23,
+                       "  {}: min={:.4f}%, max={:.4f}%, mean={:.4f}%, "
+                       "range={:.4f} pp, below_minimum={}, above_maximum={}.",
+                       phase,
+                       summary.minimum * 100,
+                       summary.maximum * 100,
+                       summary.mean * 100,
+                       (summary.maximum - summary.minimum) * 100,
+                       summary.below_minimum,
+                       summary.above_maximum);
+        };
+  report("before fill", before);
+  report("after fill", after);
+}
+
 void reportLayerFill(utl::Logger* logger,
                      odb::dbTechLayer* layer,
                      const LPFillOptions& options,
@@ -355,7 +384,7 @@ void reportLayerFill(utl::Logger* logger,
                statistics.placement_seconds);
 }
 
-}  // namespace
+}
 
 void validateLPFillOptions(const LPFillOptions& options)
 {
@@ -534,34 +563,21 @@ void LPFill::fillLayer(odb::dbBlock* block,
                                        candidates.problem.metal_areas,
                                        config.num_masks,
                                        created);
-  // Candidate containment, non-overlap, and spacing make tile area addition
-  // exact; tests compare this increment with full geometric union evaluation.
   const auto summary
       = summarizeFillDensity(grid.windowDensities(placed.metal_areas),
                              options.min_density,
                              options.max_density);
-  if (options.min_tile_density > 0 || options.max_tile_density < 1) {
-    std::vector<double> densities;
-    densities.reserve(placed.metal_areas.size());
-    for (size_t i = 0; i < placed.metal_areas.size(); ++i) {
-      densities.push_back(placed.metal_areas[i]
-                          / candidates.problem.tile_areas[i]);
-    }
-    const auto tiles = summarizeFillDensity(
-        densities, options.min_tile_density, options.max_tile_density);
-    logger_->info(utl::FIN,
-                  20,
-                  "LP tile density: layer={}, requested_min={:.6f}, "
-                  "requested_max={:.6f}, density_min={:.6f}, "
-                  "density_max={:.6f}, below_minimum={}, above_maximum={}.",
-                  layer->getConstName(),
-                  options.min_tile_density,
-                  options.max_tile_density,
-                  tiles.minimum,
-                  tiles.maximum,
-                  tiles.below_minimum,
-                  tiles.above_maximum);
-  }
+  const auto before_summary = summarizeFillDensity(
+      grid.windowDensities(candidates.problem.metal_areas),
+      options.min_density,
+      options.max_density);
+  reportWindowDensity(logger_,
+                      layer,
+                      grid.windows().size(),
+                      options.min_density,
+                      options.max_density,
+                      before_summary,
+                      summary);
   const auto placed_time = Clock::now();
   const auto seconds = [](const auto from, const auto to) {
     return std::chrono::duration<double>(to - from).count();
@@ -579,4 +595,4 @@ void LPFill::fillLayer(odb::dbBlock* block,
                    seconds(prepared, solved),
                    seconds(solved, placed_time)});
 }
-}  // namespace fin
+}

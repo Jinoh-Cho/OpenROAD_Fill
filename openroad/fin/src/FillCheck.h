@@ -17,8 +17,6 @@ struct FillWindow
   std::vector<size_t> tiles;
 };
 
-// Window boundaries partition the core exactly, including nonuniform edge
-// tiles and window dimensions that are not integer multiples of the step.
 class FillGrid
 {
  public:
@@ -54,4 +52,4 @@ FillDensitySummary summarizeFillDensity(const std::vector<double>& densities,
                                         double minimum,
                                         double maximum);
 
-}  // namespace fin
+}

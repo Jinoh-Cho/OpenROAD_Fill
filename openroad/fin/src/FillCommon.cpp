@@ -34,7 +34,6 @@ using odb::Rect;
 using utl::FIN;
 namespace pt = boost::property_tree;
 
-// Make a boost polygon representing a rectangle
 Polygon90 makeRect(const int x_lo,
                    const int y_lo,
                    const int x_hi,
@@ -49,8 +48,6 @@ Polygon90 makeRect(const int x_lo,
   return poly;
 }
 
-// Insert into polygon_set any part of given shape on the given layer (shape may
-// be a via)
 static void insertShape(const dbShape& shape,
                         Polygon90Set& polygon_set,
                         dbTechLayer* layer)
@@ -100,16 +97,13 @@ static void insertShape(const dbShape& shape,
   }
 }
 
-// Build a polygon set out of all the non-fill shape on the given layer
-// including wires, special wires, fill obstructions, and instances' pins & OBS
 Polygon90Set collectNonFillShapes(dbBlock* block,
                                   dbTechLayer* layer,
                                   const bool include_fill_obstructions)
 {
-  Polygon90Set non_fill;  // The result
-  dbShape shape;          // Shared temp
+  Polygon90Set non_fill;
+  dbShape shape;
 
-  // Get shapes from regular wires
   dbWireShapeItr shapes;
   for (auto net : block->getNets()) {
     dbWire* wire = net->getWire();
@@ -121,7 +115,6 @@ Polygon90Set collectNonFillShapes(dbBlock* block,
     }
   }
 
-  // Get shapes from special wires
   std::vector<dbShape> via_shapes;
   for (auto net : block->getNets()) {
     for (auto swire : net->getSWires()) {
@@ -145,15 +138,13 @@ Polygon90Set collectNonFillShapes(dbBlock* block,
     }
   }
 
-  // Get shapes from instances
-  dbInstShapeItr insts(/* expand_vias */ false);
+  dbInstShapeItr insts( false);
   for (auto inst : block->getInsts()) {
     for (insts.begin(inst, dbInstShapeItr::ALL); insts.next(shape);) {
       insertShape(shape, non_fill, layer);
     }
   }
 
-  // Get shapes from fill obstructions
   for (auto obstruction : block->getObstructions()) {
     auto* box = obstruction->getBBox();
     if (include_fill_obstructions && obstruction->isFillObstruction()
@@ -180,21 +171,12 @@ std::pair<int, int> getSpacing(dbTechLayer* layer, const FillShapesConfig& cfg)
   return std::make_pair(space_x, space_y);
 }
 
-// Two different polygons might be less than min space apart and this
-// can lead to DRVs when they are filled independently.  To avoid this
-// we exclude a min-space area around each polygon.  This is somewhat
-// conservative as we may not actually put a fill where a DRV would be
-// caused but is much faster than updating the fill area after every
-// polygon is filled.
 void pruneFillArea(Polygon90Set& fill_area,
                    dbTechLayer* layer,
                    const FillShapesConfig& cfg)
 {
   auto [space_x, space_y] = getSpacing(layer, cfg);
 
-  // From Boost on grow_and:
-  //   Same as bloating non-overlapping regions and then applying self
-  //   intersect to retain only the overlaps introduced by the bloat.
   Polygon90Set pruned(fill_area);
   grow_and(pruned, space_x, space_x, space_y, space_y);
   fill_area -= pruned;
@@ -219,7 +201,6 @@ std::vector<Rectangle> staggerSites(const Rectangle& bounds,
                                     const FillShapesConfig& config)
 {
   std::vector<Rectangle> result;
-  // Four rectangular sublattices encode the odd-row X and odd-column Y shifts.
   for (int row_parity = 0; row_parity < 2; ++row_parity) {
     for (int col_parity = 0; col_parity < 2; ++col_parity) {
       const int64_t base_x = int64_t{config.pattern_origin.x()}
@@ -246,7 +227,7 @@ std::vector<Rectangle> staggerSites(const Rectangle& bounds,
   return result;
 }
 
-}  // namespace
+}
 
 Polygon90Set makeFillPattern(const Rectangle& bounds,
                              const int width,
@@ -268,8 +249,6 @@ Polygon90Set makeFillPattern(const Rectangle& bounds,
   const int64_t pitch_y = int64_t{height} + space_y;
   Polygon90Set result;
   if (!config.stagger) {
-    // Preserve the original grid, including partial boundary shapes used by
-    // the existing union/intersection/keep sequence when spacing is zero.
     for (int64_t x = xl(bounds); x < xh(bounds); x += pitch_x) {
       for (int64_t y = yl(bounds); y < yh(bounds); y += pitch_y) {
         if (x + width <= std::numeric_limits<int>::max()
@@ -386,7 +365,6 @@ FillLayerConfig readLayer(const pt::ptree& tree, const int dbu)
   return config;
 }
 
-// Retain the fill algorithm's shape-size ordering and polygon-local grid.
 void appendShapeCandidates(Polygon90Set& remaining,
                            dbTechLayer* layer,
                            const FillShapesConfig& config,
@@ -427,7 +405,7 @@ void appendShapeCandidates(Polygon90Set& remaining,
     remaining -= occupied;
   }
 }
-}  // namespace
+}
 
 FillLayerConfigs loadFillRules(const char* filename,
                                dbTech* tech,
@@ -490,7 +468,6 @@ double rectangleArea(const Rectangle& rectangle)
   return (static_cast<double>(xh(rectangle)) - xl(rectangle))
          * (static_cast<double>(yh(rectangle)) - yl(rectangle));
 }
-// Candidates already satisfy spacing; selection only enforces the LP budget.
 std::vector<Rectangle> selectFillCandidates(
     const std::vector<Rectangle>& candidates,
     const double target_area)
@@ -535,4 +512,4 @@ void forEachFillTile(const size_t count,
     std::rethrow_exception(failure);
   }
 }
-}  // namespace fin
+}

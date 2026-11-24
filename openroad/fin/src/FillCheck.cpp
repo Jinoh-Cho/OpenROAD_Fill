@@ -39,7 +39,7 @@ size_t edgeIndex(const std::vector<int>& edges, const int coordinate)
   return std::lower_bound(edges.begin(), edges.end(), coordinate)
          - edges.begin();
 }
-}  // namespace
+}
 
 FillGrid::FillGrid(const odb::Rect& region,
                    const odb::Point& window_size,
@@ -179,4 +179,4 @@ FillDensitySummary summarizeFillDensity(const std::vector<double>& densities,
   }
   return summary;
 }
-}  // namespace fin
+}
