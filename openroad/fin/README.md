@@ -70,6 +70,12 @@ of `12.5` microns horizontally and `15` microns vertically. Step ratios are
 converted to distances and rounded to database units before constructing the
 tile/window grid.
 
+The window dimensions and window step ratios determine the tile partition used in the LP formulation. 
+For example, a 50 × 50 µm window with step ratios of 0.25 × 0.25 produces 12.5 × 12.5 µm tiles.
+Each LP variable represents the fill area to be added to one tile.
+Without tile density bounds, fill may concentrate in certain tiles while still satisfying the window density constraints.
+Specifying minimum and maximum tile densities helps control this local concentration.
+
 ## Example scripts
 
 The rules `json` file controls fill and you can see an example
@@ -131,26 +137,7 @@ logical row `r` and column `c`, shape width `w`, height `h`, and fill spacings
 - `x = origin_x + c * (w + sx) + (r mod 2) * X_OFFSET`
 - `y = origin_y + r * (h + sy) + (c mod 2) * Y_OFFSET`
 
-The origin is the fill area's lower-left corner for `density_fill`, and the
-core lower-left corner for `lp_fill`. It is shared across polygons and LP tiles.
-The same physical offset applies to every configured shape size. All shapes
-remain inside their fillable regions. Selection follows candidate generation
-order for both staggered and non-staggered patterns.
-
-An omitted `stagger` setting or explicit `"OFF"` preserves the existing
-polygon-local grid. Offsets provided with `"OFF"` are validated but do not move
-shapes. `"ON"` with `[0, 0]` produces a globally aligned grid.
-
-The `opc` section is optional depending on your process.
-
-The width/height lists are effectively parallel arrays of shapes to try
-in left to right order (generally larger to smaller).
-
-The layer grouping is for convenience. For example in some technologies many
-layers have similar rules so it is convenient to have a `Mx`, `Cx` group.
-
-This all started out in `klayout` so there are some obsolete fields that the
-parser accepts but ignores (e.g., `space_to_outline`).
+The staggered option for `opc` section is not currently supported.
 
 ## Regression tests
 
@@ -161,8 +148,6 @@ Simply run the following command:
 ```shell
 bazelisk test //openroad/fin/...
 ```
-
-## Limitations
 
 ## License
 
