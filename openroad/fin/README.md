@@ -117,7 +117,8 @@ If these conditions are not met, the command terminates without inserting
 fill. Reduce the window size if an insufficient number of window positions
 is available.
 
-Tiles at the core boundary may be smaller than the regular tile size.
+Also, if the core dimensions are not exact multiples of the tile size,
+partial tiles may be created at the core boundary.
 
 #### Configuration considerations
 
