@@ -490,13 +490,36 @@ void LPFill::fill(const LPFillOptions& options)
   }
   auto* block = db_->getChip()->getBlock();
   const int dbu = db_->getTech()->getDbUnitsPerMicron();
-  const int window_size = toDbu(options.window_size, dbu);
-  if (window_size % options.resolution != 0) {
+  const int requested_window_size = toDbu(options.window_size, dbu);
+  if (options.resolution > requested_window_size) {
     throw std::invalid_argument(
-        "Window size in DBU must be divisible by resolution; choose a window "
-        "size or resolution that gives an integer tile size in DBU.");
+        "Resolution exceeds the window size in DBU; tiles must be at least "
+        "one DBU wide.");
   }
+  const int64_t adjusted_window_size
+      = ((int64_t{requested_window_size} + options.resolution / 2)
+         / options.resolution)
+        * options.resolution;
+  if (adjusted_window_size > std::numeric_limits<int>::max()) {
+    throw std::invalid_argument(
+        "Adjusted window size exceeds the DBU coordinate range.");
+  }
+  const int window_size = static_cast<int>(adjusted_window_size);
   const int tile_size = window_size / options.resolution;
+  if (window_size != requested_window_size) {
+    logger_->warn(utl::FIN,
+                  18,
+                  "Adjusted window size from {:.12g} um ({} DBU) to {:.12g} "
+                  "um ({} DBU) for resolution {}; tile size and window step "
+                  "are {:.12g} um ({} DBU).",
+                  options.window_size,
+                  requested_window_size,
+                  static_cast<double>(window_size) / dbu,
+                  window_size,
+                  options.resolution,
+                  static_cast<double>(tile_size) / dbu,
+                  tile_size);
+  }
   const FillGrid grid(block->getCoreArea(),
                       odb::Point(window_size, window_size),
                       odb::Point(tile_size, tile_size));

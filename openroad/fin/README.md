@@ -79,15 +79,32 @@ shifted by one tile (`w/r`). Here, `w` is `-window_size` and `r` is `-resolution
 In general, a window has size `w × w`, a tile has size `(w/r) × (w/r)`,
 and the window moves by `w/r` in each direction. Resolution is the number of
 tiles per side, not the total number of tiles in a window (`r × r`).
-The window size is rounded to database units (DBU) and must then be exactly
-divisible by `r`, so tile boundaries and window boundaries remain aligned.
+The window size is first rounded to database units (DBU), then adjusted to
+the nearest multiple of `r` if necessary (ties round upward). A warning reports
+the requested and adjusted window sizes and the resulting tile size and step.
+For example, at 1,000 DBU/µm, `-window_size 50 -resolution 3` uses a
+50.001 µm window and 16.667 µm tiles and steps. The adjusted window size
+is used for both window geometry and density calculations, keeping tile and
+window boundaries aligned. Each tile must be at least one DBU wide, and the
+adjusted window must fit inside the core.
 The core boundary may leave smaller tiles outside the complete windows.
 
-Each LP variable represents the fill area to be added to one tile.
-Without tile density bounds, fill may concentrate in certain tiles while still satisfying the window density constraints.
-Specifying minimum and maximum tile densities helps control this local concentration.
+#### Configuration considerations
 
-## Example scripts
+Each tile has an LP variable representing the fill area to be added.
+Increasing `-resolution` creates more tiles, providing finer spatial control
+but increasing the LP size and potentially the solver runtime.
+
+For large LP problems, consider using `-solver pdlp` instead of GLOP and
+increasing `-solver_threads` to enable parallel LP solving. To accelerate
+fill processing outside the LP solver, increase `-num_threads`. The benefit
+of additional threads depends on the design and available CPU resources.
+
+Window density constraints apply to the combined density of multiple tiles
+and may allow fill to concentrate in individual tiles. Use `-min_tile_density`
+and `-max_tile_density` to control this local concentration.
+
+## Example JSON
 
 The rules `json` file controls fill and you can see an example
 The schema for the `json` is:

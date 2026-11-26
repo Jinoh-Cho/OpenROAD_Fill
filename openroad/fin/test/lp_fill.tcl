@@ -10,8 +10,7 @@ foreach {window resolution expected} {
   50 0 {Resolution must be a positive integer.}
   50 -1 {Resolution must be a positive integer.}
   0 4 {Window size must be finite and positive.}
-  50 3 {Window size in DBU must be divisible by resolution}
-  50 100001 {Window size in DBU must be divisible by resolution}
+  50 100001 {Resolution exceeds the window size in DBU}
 } {
   if { ![catch {
     lp_fill -rules [file join $fin_test_dir fill.json] \
@@ -37,5 +36,25 @@ set def_file [make_result_file $test_name.def]
 write_def $def_file
 if { [diff_files $def_file [file join $fin_test_dir $test_name.defok]] } {
   error "LP fill DEF differs from the reference result."
+}
+foreach {requested adjusted resolution} {
+  50 50.001 3
+  50.002 50.001 3
+  50.002 50.004 4
+} {
+  foreach size [list $requested $adjusted] name {requested adjusted} {
+    odb::dbChip_destroy [odb::dbDatabase_getChip [ord::get_db]]
+    read_def [file join $fin_test_dir gcd_prefill.def]
+    lp_fill -rules [file join $fin_test_dir fill.json] \
+      -objective min_fill -solver glop \
+      -window_size $size -resolution $resolution \
+      -min_density 0.10 -max_density 0.70 \
+      -min_tile_density 0.10 -max_tile_density 0.70
+    set ${name}_def [make_result_file ${test_name}_${requested}_${name}.def]
+    write_def [set ${name}_def]
+  }
+  if { [diff_files $requested_def $adjusted_def] } {
+    error "Automatically adjusted window $requested differs from explicit window $adjusted."
+  }
 }
 puts "pass"
