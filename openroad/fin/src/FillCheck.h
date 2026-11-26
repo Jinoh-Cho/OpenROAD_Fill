@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <vector>
 
 #include "fin/Finale.h"
@@ -30,6 +31,36 @@ Polygon90Set collectLayerMetal(odb::dbBlock* block, odb::dbTechLayer* layer);
 void checkDiscreteDensity(odb::dbDatabase* db,
                           utl::Logger* logger,
                           const DiscreteDensityCheckOptions& options);
+
+struct ContinuousDensityViolation
+{
+  odb::Rect bounds;
+  double density;
+  bool below_minimum;
+};
+
+struct ContinuousDensityResult
+{
+  double min_density = 0.0;
+  double max_density = 0.0;
+  odb::Rect min_window;
+  odb::Rect max_window;
+  size_t evaluated_event_windows = 0;
+  size_t below_minimum = 0;
+  size_t above_maximum = 0;
+};
+
+ContinuousDensityResult analyzeContinuousDensity(
+    const Polygon90Set& metal,
+    const odb::Rect& area,
+    int window_size,
+    double min_density,
+    double max_density,
+    const std::function<void(const ContinuousDensityViolation&)>& on_violation
+    = {});
+void checkContinuousDensity(odb::dbDatabase* db,
+                            utl::Logger* logger,
+                            const ContinuousDensityCheckOptions& options);
 
 struct FillWindow
 {

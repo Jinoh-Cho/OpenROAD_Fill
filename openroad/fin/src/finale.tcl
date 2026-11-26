@@ -120,3 +120,38 @@ proc discrete_density_check { args } {
     $keys(-num_threads) $keys(-layers) $has_area $area \
     $keys(-min_density) $keys(-max_density) $keys(-report)
 }
+
+sta::define_cmd_args "continuous_density_check" {
+  -window_size size
+  [-layers layer_names]
+  [-area {lx ly ux uy}]
+  [-min_density density]
+  [-max_density density]
+  [-report filename]
+}
+
+proc continuous_density_check { args } {
+  sta::parse_key_args "continuous_density_check" args \
+    keys {-window_size -layers -area -min_density -max_density -report} flags {}
+  sta::check_argc_eq0 "continuous_density_check" $args
+  if { ![info exists keys(-window_size)] } {
+    utl::error FIN 32 "The -window_size argument must be specified."
+  }
+  foreach {key value} {-layers {} -min_density 0.20 -max_density 0.70 -report {}} {
+    if { ![info exists keys($key)] } {
+      set keys($key) $value
+    }
+  }
+  set has_area [info exists keys(-area)]
+  set area [odb::Rect]
+  if { $has_area } {
+    if { [llength $keys(-area)] != 4 } {
+      utl::error FIN 35 "The -area argument must be a list of 4 coordinates in microns."
+    }
+    lassign $keys(-area) lx ly ux uy
+    $area init [ord::microns_to_dbu $lx] [ord::microns_to_dbu $ly] \
+      [ord::microns_to_dbu $ux] [ord::microns_to_dbu $uy]
+  }
+  fin::continuous_density_check_cmd $keys(-window_size) $keys(-layers) \
+    $has_area $area $keys(-min_density) $keys(-max_density) $keys(-report)
+}

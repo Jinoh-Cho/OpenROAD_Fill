@@ -11,6 +11,7 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -19,6 +20,17 @@
 
 namespace fin {
 namespace {
+int densityWindowDbu(const double microns, const int dbu)
+{
+  const double value = std::round(microns * dbu);
+  if (!std::isfinite(microns) || microns <= 0 || !std::isfinite(value)
+      || value < 1 || value > std::numeric_limits<int>::max()) {
+    throw std::invalid_argument(
+        "Window size must be positive and representable in DBU.");
+  }
+  return static_cast<int>(value);
+}
+
 std::vector<int> makeEdges(const int low,
                            const int high,
                            const int size,
@@ -247,13 +259,7 @@ DensityGridConfig makeDensityGridConfig(odb::dbTech* tech,
         "Density check area must have positive width and height.");
   }
   const int dbu = tech->getDbUnitsPerMicron();
-  const double requested = std::round(window_size * dbu);
-  if (!std::isfinite(requested) || requested < 1
-      || requested > std::numeric_limits<int>::max()) {
-    throw std::invalid_argument(
-        "Window size must be positive and representable in DBU.");
-  }
-  const int requested_dbu = static_cast<int>(requested);
+  const int requested_dbu = densityWindowDbu(window_size, dbu);
   const int manufacturing_grid = std::max(tech->getManufacturingGrid(), 1);
   const int64_t quantum = int64_t{resolution} * manufacturing_grid;
   const int tile_size
@@ -378,6 +384,32 @@ boost::json::object layerDensityReport(
           {"above_maximum", summary.above_maximum},
           {"windows", std::move(windows)}};
 }
+std::ofstream openDensityReport(const std::string& filename,
+                                utl::Logger* logger)
+{
+  std::ofstream output;
+  if (!filename.empty()) {
+    output.open(filename);
+    if (!output) {
+      logger->error(utl::FIN, 29, "Cannot open density report '{}'.", filename);
+    }
+  }
+  return output;
+}
+
+void closeDensityReport(std::ofstream& output,
+                        const std::string& filename,
+                        utl::Logger* logger)
+{
+  if (!filename.empty()) {
+    output.close();
+    if (!output) {
+      logger->error(
+          utl::FIN, 30, "Failed to write density report '{}'.", filename);
+    }
+  }
+}
+
 }
 
 void checkDiscreteDensity(odb::dbDatabase* db,
@@ -412,14 +444,7 @@ void checkDiscreteDensity(odb::dbDatabase* db,
                       odb::Point(config.window_size, config.window_size),
                       odb::Point(config.tile_size, config.tile_size));
   const auto layers = densityLayers(db->getTech(), options.layers, logger);
-  std::ofstream output;
-  if (!options.report.empty()) {
-    output.open(options.report);
-    if (!output) {
-      logger->error(
-          utl::FIN, 29, "Cannot open density report '{}'.", options.report);
-    }
-  }
+  auto output = openDensityReport(options.report, logger);
   const double dbu = db->getTech()->getDbUnitsPerMicron();
   boost::json::object report{{"schema_version", 1},
                              {"area_um", boundsInMicrons(area, dbu)},
@@ -457,12 +482,356 @@ void checkDiscreteDensity(odb::dbDatabase* db,
   }
   if (!options.report.empty()) {
     output << boost::json::serialize(report) << '\n';
-    output.close();
-    if (!output) {
-      logger->error(
-          utl::FIN, 30, "Failed to write density report '{}'.", options.report);
+  }
+  closeDensityReport(output, options.report, logger);
+}
+
+namespace {
+struct ContinuousGeometry
+{
+  std::vector<Rectangle> rectangles;
+  std::unordered_map<int64_t, std::vector<size_t>> rows;
+  std::vector<int> y_events;
+  int window_size;
+  int min_x;
+  int max_x;
+  int min_y;
+  int max_y;
+};
+
+void addContinuousEvent(std::vector<int>& events,
+                        const int64_t coordinate,
+                        const int minimum,
+                        const int maximum)
+{
+  if (coordinate >= minimum && coordinate <= maximum) {
+    events.push_back(static_cast<int>(coordinate));
+  }
+}
+
+ContinuousGeometry makeContinuousGeometry(const Polygon90Set& metal,
+                                          const odb::Rect& area,
+                                          const int window_size)
+{
+  if (window_size <= 0 || int64_t{area.xMax()} - area.xMin() < window_size
+      || int64_t{area.yMax()} - area.yMin() < window_size) {
+    throw std::invalid_argument(
+        "Continuous density window must fit inside the check area.");
+  }
+  ContinuousGeometry geometry{{},
+                              {},
+                              {},
+                              window_size,
+                              area.xMin(),
+                              area.xMax() - window_size,
+                              area.yMin(),
+                              area.yMax() - window_size};
+  Polygon90Set clipped = metal;
+  Polygon90Set region;
+  region.insert(Rectangle(area.xMin(), area.yMin(), area.xMax(), area.yMax()));
+  clipped = clipped & region;
+  clipped.get_rectangles(geometry.rectangles);
+  geometry.y_events = {geometry.min_y, geometry.max_y};
+  for (size_t i = 0; i < geometry.rectangles.size(); ++i) {
+    const auto& rectangle = geometry.rectangles[i];
+    const int64_t bottom = yl(rectangle);
+    const int64_t top = yh(rectangle);
+    for (const int64_t y :
+         {bottom - window_size, top - window_size, bottom, top}) {
+      addContinuousEvent(geometry.y_events, y, geometry.min_y, geometry.max_y);
+    }
+    const int64_t first = (bottom - geometry.min_y) / window_size;
+    const int64_t last = (top - 1 - geometry.min_y) / window_size;
+    for (int64_t row = first; row <= last; ++row) {
+      geometry.rows[row].push_back(i);
     }
   }
+  std::ranges::sort(geometry.y_events);
+  geometry.y_events.erase(
+      std::unique(geometry.y_events.begin(), geometry.y_events.end()),
+      geometry.y_events.end());
+  return geometry;
+}
+
+std::vector<size_t> continuousRowRectangles(const ContinuousGeometry& geometry,
+                                            const int y,
+                                            std::vector<size_t>& seen,
+                                            const size_t generation)
+{
+  std::vector<size_t> indices;
+  const int64_t first = (int64_t{y} - geometry.min_y) / geometry.window_size;
+  const int64_t last = (int64_t{y} + geometry.window_size - 1 - geometry.min_y)
+                       / geometry.window_size;
+  for (int64_t row = first; row <= last; ++row) {
+    const auto bucket = geometry.rows.find(row);
+    if (bucket == geometry.rows.end()) {
+      continue;
+    }
+    for (const size_t index : bucket->second) {
+      if (seen[index] != generation) {
+        seen[index] = generation;
+        const auto& rectangle = geometry.rectangles[index];
+        if (yl(rectangle) < int64_t{y} + geometry.window_size
+            && y < yh(rectangle)) {
+          indices.push_back(index);
+        }
+      }
+    }
+  }
+  return indices;
+}
+
+struct ContinuousXEvent
+{
+  int x;
+  int64_t slope_delta;
+};
+
+struct ContinuousRowSweep
+{
+  int64_t area = 0;
+  int64_t slope = 0;
+  std::vector<ContinuousXEvent> events;
+};
+
+ContinuousRowSweep makeContinuousRowSweep(const ContinuousGeometry& geometry,
+                                          const int y,
+                                          const std::vector<size_t>& indices)
+{
+  ContinuousRowSweep sweep;
+  if (geometry.max_x > geometry.min_x) {
+    sweep.events.push_back({geometry.max_x, 0});
+  }
+  const auto add_event = [&](const int64_t x, const int64_t delta) {
+    if (x > geometry.min_x && x <= geometry.max_x) {
+      sweep.events.push_back({static_cast<int>(x), delta});
+    }
+  };
+  for (const size_t index : indices) {
+    const auto& rectangle = geometry.rectangles[index];
+    const int64_t height
+        = std::min(int64_t{y} + geometry.window_size, int64_t{yh(rectangle)})
+          - std::max(int64_t{y}, int64_t{yl(rectangle)});
+    const int64_t left = xl(rectangle);
+    const int64_t right = xh(rectangle);
+    const int64_t overlap_x = std::max<int64_t>(
+        0,
+        std::min(int64_t{geometry.min_x} + geometry.window_size, right)
+            - std::max(int64_t{geometry.min_x}, left));
+    sweep.area += overlap_x * height;
+    if (geometry.min_x >= left - geometry.window_size
+        && geometry.min_x < right - geometry.window_size) {
+      sweep.slope += height;
+    }
+    if (geometry.min_x >= left && geometry.min_x < right) {
+      sweep.slope -= height;
+    }
+    add_event(left - geometry.window_size, height);
+    add_event(right - geometry.window_size, -height);
+    add_event(left, -height);
+    add_event(right, height);
+  }
+  std::ranges::sort(sweep.events, {}, &ContinuousXEvent::x);
+  return sweep;
+}
+
+void validateDensityLimits(const double minimum, const double maximum)
+{
+  if (!std::isfinite(minimum) || !std::isfinite(maximum) || minimum < 0
+      || maximum > 1 || minimum > maximum) {
+    throw std::invalid_argument(
+        "Density bounds must satisfy 0 <= min_density <= max_density <= 1.");
+  }
+}
+}
+
+ContinuousDensityResult analyzeContinuousDensity(
+    const Polygon90Set& metal,
+    const odb::Rect& area,
+    const int window_size,
+    const double min_density,
+    const double max_density,
+    const std::function<void(const ContinuousDensityViolation&)>& on_violation)
+{
+  validateDensityLimits(min_density, max_density);
+  const auto geometry = makeContinuousGeometry(metal, area, window_size);
+  const double window_area = static_cast<double>(window_size) * window_size;
+  ContinuousDensityResult result;
+  int64_t minimum_area = std::numeric_limits<int64_t>::max();
+  int64_t maximum_area = -1;
+  const auto record = [&](const int x, const int y, const int64_t metal_area) {
+    const odb::Rect bounds(x, y, x + window_size, y + window_size);
+    if (metal_area < minimum_area) {
+      minimum_area = metal_area;
+      result.min_window = bounds;
+    }
+    if (metal_area > maximum_area) {
+      maximum_area = metal_area;
+      result.max_window = bounds;
+    }
+    ++result.evaluated_event_windows;
+    const double density = static_cast<double>(metal_area) / window_area;
+    const bool below = density < min_density;
+    const bool above = density > max_density;
+    result.below_minimum += below;
+    result.above_maximum += above;
+    if ((below || above) && on_violation) {
+      on_violation({bounds, density, below});
+    }
+  };
+  std::vector<size_t> seen(geometry.rectangles.size(), 0);
+  size_t generation = 0;
+  for (const int y : geometry.y_events) {
+    if (++generation == 0) {
+      std::fill(seen.begin(), seen.end(), 0);
+      ++generation;
+    }
+    const auto indices = continuousRowRectangles(geometry, y, seen, generation);
+    auto sweep = makeContinuousRowSweep(geometry, y, indices);
+    record(geometry.min_x, y, sweep.area);
+    int previous_x = geometry.min_x;
+    for (size_t i = 0; i < sweep.events.size();) {
+      const int x = sweep.events[i].x;
+      sweep.area += sweep.slope * (int64_t{x} - previous_x);
+      record(x, y, sweep.area);
+      do {
+        sweep.slope += sweep.events[i++].slope_delta;
+      } while (i < sweep.events.size() && sweep.events[i].x == x);
+      previous_x = x;
+    }
+  }
+  result.min_density = static_cast<double>(minimum_area) / window_area;
+  result.max_density = static_cast<double>(maximum_area) / window_area;
+  return result;
+}
+
+namespace {
+boost::json::object continuousLayerSummary(
+    const char* name,
+    const ContinuousDensityResult& result,
+    const double dbu)
+{
+  return {{"name", name},
+          {"min_density", result.min_density},
+          {"max_density", result.max_density},
+          {"min_window_um", boundsInMicrons(result.min_window, dbu)},
+          {"max_window_um", boundsInMicrons(result.max_window, dbu)},
+          {"evaluated_event_windows", result.evaluated_event_windows},
+          {"below_minimum", result.below_minimum},
+          {"above_maximum", result.above_maximum}};
+}
+
+void checkContinuousLayer(odb::dbBlock* block,
+                          odb::dbTechLayer* layer,
+                          const odb::Rect& area,
+                          const int window_size,
+                          const ContinuousDensityCheckOptions& options,
+                          std::ofstream& output,
+                          const bool first_layer,
+                          utl::Logger* logger)
+{
+  const double dbu = block->getTech()->getDbUnitsPerMicron();
+  bool first_violation = true;
+  std::function<void(const ContinuousDensityViolation&)> emit;
+  if (output.is_open()) {
+    output << (first_layer ? "" : ",") << "{\"violations\":[";
+    emit = [&](const ContinuousDensityViolation& violation) {
+      const boost::json::object entry{
+          {"bounds_um", boundsInMicrons(violation.bounds, dbu)},
+          {"density", violation.density},
+          {"type",
+           violation.below_minimum ? "below_minimum" : "above_maximum"}};
+      output << (first_violation ? "" : ",") << boost::json::serialize(entry);
+      first_violation = false;
+    };
+  }
+  const auto result = analyzeContinuousDensity(collectLayerMetal(block, layer),
+                                               area,
+                                               window_size,
+                                               options.min_density,
+                                               options.max_density,
+                                               emit);
+  logger->info(
+      utl::FIN,
+      34,
+      "Continuous density (ALG3): layer={}, min={:.6f} at "
+      "[{:.12g}, {:.12g}, {:.12g}, {:.12g}] um, max={:.6f} at "
+      "[{:.12g}, {:.12g}, {:.12g}, {:.12g}] um; "
+      "below_minimum={}, above_maximum={}, evaluated_event_windows={}.",
+      layer->getConstName(),
+      result.min_density,
+      result.min_window.xMin() / dbu,
+      result.min_window.yMin() / dbu,
+      result.min_window.xMax() / dbu,
+      result.min_window.yMax() / dbu,
+      result.max_density,
+      result.max_window.xMin() / dbu,
+      result.max_window.yMin() / dbu,
+      result.max_window.xMax() / dbu,
+      result.max_window.yMax() / dbu,
+      result.below_minimum,
+      result.above_maximum,
+      result.evaluated_event_windows);
+  if (output.is_open()) {
+    const std::string summary = boost::json::serialize(
+        continuousLayerSummary(layer->getConstName(), result, dbu));
+    output << "]," << summary.substr(1);
+  }
+}
+}
+
+void checkContinuousDensity(odb::dbDatabase* db,
+                            utl::Logger* logger,
+                            const ContinuousDensityCheckOptions& options)
+{
+  validateDensityLimits(options.min_density, options.max_density);
+  if (db->getTech() == nullptr || db->getChip() == nullptr
+      || db->getChip()->getBlock() == nullptr) {
+    logger->error(
+        utl::FIN, 33, "continuous_density_check requires a loaded design.");
+  }
+  auto* block = db->getChip()->getBlock();
+  const auto area = options.has_area ? options.area : block->getCoreArea();
+  if (area.xMin() >= area.xMax() || area.yMin() >= area.yMax()) {
+    throw std::invalid_argument(
+        "Density check area must have positive width and height.");
+  }
+  const int dbu = db->getTech()->getDbUnitsPerMicron();
+  const int window_size = densityWindowDbu(options.window_size, dbu);
+  checkWindowPositions(area,
+                       {window_size, 1, 1},
+                       options.window_size,
+                       dbu,
+                       "continuous_density_check",
+                       options.has_area ? "check area" : "core",
+                       logger);
+  const auto layers = densityLayers(db->getTech(), options.layers, logger);
+  auto output = openDensityReport(options.report, logger);
+  if (output.is_open()) {
+    const boost::json::object header{
+        {"schema_version", 1},
+        {"algorithm", "ALG3"},
+        {"area_um", boundsInMicrons(area, dbu)},
+        {"requested_window_size_um", options.window_size},
+        {"window_size_um", static_cast<double>(window_size) / dbu},
+        {"min_density_limit", options.min_density},
+        {"max_density_limit", options.max_density},
+        {"violation_representation", "representative_edge_event_windows"},
+        {"all_continuous_positions_listed", false}};
+    auto text = boost::json::serialize(header);
+    text.pop_back();
+    output << text << ",\"layers\":[";
+  }
+  bool first_layer = true;
+  for (auto* layer : layers) {
+    checkContinuousLayer(
+        block, layer, area, window_size, options, output, first_layer, logger);
+    first_layer = false;
+  }
+  if (output.is_open()) {
+    output << "]}\n";
+  }
+  closeDensityReport(output, options.report, logger);
 }
 
 }

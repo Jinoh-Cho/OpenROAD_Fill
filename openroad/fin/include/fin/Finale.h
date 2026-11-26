@@ -40,6 +40,17 @@ struct DiscreteDensityCheckOptions
   std::string report;
 };
 
+struct ContinuousDensityCheckOptions
+{
+  double window_size = 50.0;
+  double min_density = 0.2;
+  double max_density = 0.7;
+  std::vector<std::string> layers;
+  bool has_area = false;
+  odb::Rect area;
+  std::string report;
+};
+
 class Finale
 {
  public:
@@ -50,6 +61,8 @@ class Finale
   void lpFill(const LPFillOptions& options);
 
   void discreteDensityCheck(const DiscreteDensityCheckOptions& options);
+
+  void continuousDensityCheck(const ContinuousDensityCheckOptions& options);
 
   void setDebug();
 

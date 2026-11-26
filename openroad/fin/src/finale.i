@@ -81,5 +81,25 @@ discrete_density_check_cmd(double window_size,
   ord::OpenRoad::openRoad()->getFinale()->discreteDensityCheck(options);
 }
 
+void
+continuous_density_check_cmd(double window_size,
+                             const std::vector<std::string>& layers,
+                             bool has_area,
+                             const odb::Rect& area,
+                             double min_density,
+                             double max_density,
+                             const char* report)
+{
+  fin::ContinuousDensityCheckOptions options;
+  options.window_size = window_size;
+  options.layers = layers;
+  options.has_area = has_area;
+  options.area = area;
+  options.min_density = min_density;
+  options.max_density = max_density;
+  options.report = report;
+  ord::OpenRoad::openRoad()->getFinale()->continuousDensityCheck(options);
+}
+
 %} // inline
 

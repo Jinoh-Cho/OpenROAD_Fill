@@ -41,4 +41,10 @@ void Finale::discreteDensityCheck(const DiscreteDensityCheckOptions& options)
   checkDiscreteDensity(db_, logger_, options);
 }
 
+void Finale::continuousDensityCheck(
+    const ContinuousDensityCheckOptions& options)
+{
+  checkContinuousDensity(db_, logger_, options);
+}
+
 }  // namespace fin

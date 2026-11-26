@@ -16,6 +16,7 @@ COMPULSORY_TESTS = [
 ]
 
 PASSFAIL_TESTS = [
+    "continuous_density_check",
     "discrete_density_check",
     "density_fill_obstruction",
     "lp_fill",

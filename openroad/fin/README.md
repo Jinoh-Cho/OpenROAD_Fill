@@ -180,6 +180,50 @@ The JSON report records the check area and window bounds in microns, the
 requested and effective window sizes, tile size, density limits, and per-layer
 summaries and window results.
 
+### Continuous density check
+
+Find the exact minimum and maximum area density over freely positioned square
+windows using ALG3. Window-sized spatial buckets restrict each horizontal
+edge-event sweep; the relevant vertical edge-event positions are also evaluated.
+This command uses the same unioned metal geometry as `discrete_density_check`
+and does not modify the design.
+
+```tcl
+continuous_density_check
+    -window_size size
+    [-layers layer_names]
+    [-area {lx ly ux uy}]
+    [-min_density density]
+    [-max_density density]
+    [-report filename]
+```
+
+#### Options
+
+| Switch Name | Description |
+| ----- | ----- |
+| `-window_size` | Required. Square window side length in microns, rounded to DBU. No resolution or tile-size adjustment is applied. |
+| `-layers` | Optional. Routing layer names; defaults to all routing layers. |
+| `-area` | Optional. Check area `{lx ly ux uy}`, in microns; defaults to the core. The window must have room to move along both axes. |
+| `-min_density` | Optional. Minimum density from `0` to `1`; default `0.20`. |
+| `-max_density` | Optional. Maximum density from `0` to `1`, at least the minimum; default `0.70`. |
+| `-report` | Optional. JSON filename for extrema, their window bounds, and representative violating windows. |
+
+ALG3 is the only algorithm; no algorithm, profile, direction, resolution, or
+step options are needed. Both axes are considered when finding extrema.
+Logs show each layer's minimum and maximum density and corresponding window
+bounds in microns. Violations are reported without terminating the command;
+invalid inputs or report-writing failures produce errors.
+
+With `-report`, violating windows evaluated at feature-edge events are streamed
+to JSON as `violations`, each with `bounds_um`, `density`, and a `type` of
+`below_minimum` or `above_maximum`. These are representative witness windows,
+not an exhaustive enumeration of infinitely many continuous positions or
+merged DRC regions. `below_minimum`, `above_maximum`, and
+`evaluated_event_windows` count the evaluated event windows. The global
+extrema are exact regardless of whether a report is requested. Violation
+output can be large; it is streamed rather than accumulated in memory.
+
 ## Example JSON
 
 The rules `json` file controls fill and you can see an example
