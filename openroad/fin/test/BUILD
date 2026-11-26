@@ -6,6 +6,11 @@ load("//test:regression.bzl", "doc_check_test", "regression_test")
 
 package(features = ["layering_check"])
 
+exports_files(
+    ["FillGridTest.cpp"],
+    visibility = ["//openroad/fin:__pkg__"],
+)
+
 COMPULSORY_TESTS = [
     "gcd_fill",
 ]

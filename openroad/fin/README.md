@@ -30,10 +30,23 @@ density_fill
 
 ### LP Fill
 
-Optimize metal fill using a linear program (LP) and place fill rectangles to achieve the window density targets determined by the LP, using the same JSON rule format as `density_fill`.
+This command performs metal fill insertion to satisfy both window-based
+density constraints and metal fill DRC rules.
 
-The LP Fill implementation was developed with reference to [1] and [2],
+It uses linear programming (LP) to determine target window densities
+under user-specified density constraints, with two supported optimization
+objectives: minimizing density variation (Min-Var) and minimizing the
+total amount of inserted fill (Min-Fill) [1, 2].
+
+Based on the LP solution, fill rectangles are placed to achieve the
+target window densities using the same JSON rule format as `density_fill`.
+
+The LP-based fill implementation was developed with reference to [1] and [2],
 particularly their LP formulations and layout density control objectives.
+
+In some cases, the resulting layout may not satisfy the user-specified
+density constraints due to insufficient available space for metal fill
+insertion while complying with the DRC rules.
 
 ```tcl
 lp_fill
@@ -79,15 +92,23 @@ shifted by one tile (`w/r`). Here, `w` is `-window_size` and `r` is `-resolution
 In general, a window has size `w × w`, a tile has size `(w/r) × (w/r)`,
 and the window moves by `w/r` in each direction. Resolution is the number of
 tiles per side, not the total number of tiles in a window (`r × r`).
-The window size is first rounded to database units (DBU), then adjusted to
-the nearest multiple of `r` if necessary (ties round upward). A warning reports
-the requested and adjusted window sizes and the resulting tile size and step.
-For example, at 1,000 DBU/µm, `-window_size 50 -resolution 3` uses a
-50.001 µm window and 16.667 µm tiles and steps. The adjusted window size
-is used for both window geometry and density calculations, keeping tile and
-window boundaries aligned. Each tile must be at least one DBU wide, and the
-adjusted window must fit inside the core.
+The window size is first rounded to database units (DBU). The tile side length
+is then rounded down to a multiple of the technology LEF manufacturing grid,
+and the effective window size is set to `tile_size * r`. If the LEF does not
+specify a manufacturing grid, one DBU is used. A warning reports any resulting
+window adjustment, the manufacturing grid, and the tile size and step.
+For example, at 1,000 DBU/µm with a 0.005 µm manufacturing grid,
+`-window_size 50 -resolution 3` uses 16.665 µm tiles and steps and a
+49.995 µm window. The adjusted window size is used for both window geometry
+and density calculations. Each tile must be at least one manufacturing grid
+unit wide, and the adjusted window must fit inside the core.
 The core boundary may leave smaller tiles outside the complete windows.
+The tile grid is generated at the tile-size interval independently of window
+positions, preserving `r × r` tiles per window. At least two window positions
+must fit along each of X and Y. Otherwise, the command stops before creating
+any fill and reports the requested and effective window sizes, core dimensions
+and area, and window counts along both axes. Reduce `-window_size` to evaluate
+more positions.
 
 #### Configuration considerations
 

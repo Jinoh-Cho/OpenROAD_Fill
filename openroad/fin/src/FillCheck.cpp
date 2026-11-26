@@ -24,13 +24,15 @@ std::vector<int> makeEdges(const int low,
     throw std::invalid_argument(
         "Positive density windows and steps must fit inside the core.");
   }
-  std::vector<int> edges{low, high};
-  for (int64_t start = low; start + size <= high; start += step) {
-    edges.push_back(start);
-    edges.push_back(start + size);
+  if (size % step != 0) {
+    throw std::invalid_argument(
+        "Density window dimensions must be divisible by the tile size.");
   }
-  std::ranges::sort(edges);
-  edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+  std::vector<int> edges;
+  for (int64_t edge = low; edge < high; edge += step) {
+    edges.push_back(edge);
+  }
+  edges.push_back(high);
   return edges;
 }
 

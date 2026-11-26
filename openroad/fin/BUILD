@@ -2,6 +2,7 @@
 # Copyright (c) 2025, The OpenROAD Authors
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
 load("//bazel:tcl_encode_or.bzl", "tcl_encode")
 load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
@@ -118,4 +119,20 @@ python_wrap_library(
     name = "py_wrap",
     includes = ["src"],
     deps = [":fin"],
+)
+
+cc_test(
+    name = "fill_grid_test",
+    srcs = [
+        "src/FillCheck.h",
+        "src/polygon.h",
+        "//openroad/fin/test:FillGridTest.cpp",
+    ],
+    deps = [
+        ":fin",
+        "//openroad/odb/src/db",
+        "@boost.polygon",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
 )

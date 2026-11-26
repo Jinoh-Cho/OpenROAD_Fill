@@ -491,36 +491,63 @@ void LPFill::fill(const LPFillOptions& options)
   auto* block = db_->getChip()->getBlock();
   const int dbu = db_->getTech()->getDbUnitsPerMicron();
   const int requested_window_size = toDbu(options.window_size, dbu);
-  if (options.resolution > requested_window_size) {
+  const int manufacturing_grid
+      = std::max(db_->getTech()->getManufacturingGrid(), 1);
+  const int64_t window_quantum
+      = int64_t{options.resolution} * manufacturing_grid;
+  const int tile_size = static_cast<int>(
+      (requested_window_size / window_quantum) * manufacturing_grid);
+  if (tile_size == 0) {
     throw std::invalid_argument(
-        "Resolution exceeds the window size in DBU; tiles must be at least "
-        "one DBU wide.");
+        "Resolution is too high for the window size on the manufacturing grid; "
+        "tiles must be at least one manufacturing grid unit wide.");
   }
-  const int64_t adjusted_window_size
-      = ((int64_t{requested_window_size} + options.resolution / 2)
-         / options.resolution)
-        * options.resolution;
-  if (adjusted_window_size > std::numeric_limits<int>::max()) {
-    throw std::invalid_argument(
-        "Adjusted window size exceeds the DBU coordinate range.");
-  }
-  const int window_size = static_cast<int>(adjusted_window_size);
-  const int tile_size = window_size / options.resolution;
+  const int window_size = tile_size * options.resolution;
   if (window_size != requested_window_size) {
     logger_->warn(utl::FIN,
                   18,
                   "Adjusted window size from {:.12g} um ({} DBU) to {:.12g} "
-                  "um ({} DBU) for resolution {}; tile size and window step "
-                  "are {:.12g} um ({} DBU).",
+                  "um ({} DBU) for resolution {} and manufacturing grid {} "
+                  "DBU; tile size and window step are {:.12g} um ({} DBU).",
                   options.window_size,
                   requested_window_size,
                   static_cast<double>(window_size) / dbu,
                   window_size,
                   options.resolution,
+                  manufacturing_grid,
                   static_cast<double>(tile_size) / dbu,
                   tile_size);
   }
-  const FillGrid grid(block->getCoreArea(),
+  const auto core = block->getCoreArea();
+  const int64_t core_width = int64_t{core.xMax()} - core.xMin();
+  const int64_t core_height = int64_t{core.yMax()} - core.yMin();
+  const auto count_positions = [&](const int64_t length) -> int64_t {
+    return length < window_size ? 0 : (length - window_size) / tile_size + 1;
+  };
+  const int64_t positions_x = count_positions(core_width);
+  const int64_t positions_y = count_positions(core_height);
+  if (positions_x < 2 || positions_y < 2) {
+    const double width_um = static_cast<double>(core_width) / dbu;
+    const double height_um = static_cast<double>(core_height) / dbu;
+    const double window_um = static_cast<double>(window_size) / dbu;
+    logger_->error(
+        utl::FIN,
+        24,
+        "lp_fill requires at least two window positions in both X "
+        "and Y. Requested window size: {:.12g} um; effective window "
+        "size: {:.12g} x {:.12g} um; core size: {:.12g} x {:.12g} um "
+        "(area {:.12g} um^2); window positions: X={}, Y={}. "
+        "Reduce -window_size.",
+        options.window_size,
+        window_um,
+        window_um,
+        width_um,
+        height_um,
+        width_um * height_um,
+        positions_x,
+        positions_y);
+  }
+  const FillGrid grid(core,
                       odb::Point(window_size, window_size),
                       odb::Point(tile_size, tile_size));
   const auto layers
