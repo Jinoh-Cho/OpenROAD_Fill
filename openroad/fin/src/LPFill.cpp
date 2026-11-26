@@ -400,17 +400,11 @@ void validateLPFillOptions(const LPFillOptions& options)
   if (options.solver_threads < 1 || options.num_threads < 1) {
     throw std::invalid_argument("Thread counts must be positive.");
   }
-  for (const double value : {options.window_width, options.window_height}) {
-    if (!std::isfinite(value) || value <= 0) {
-      throw std::invalid_argument(
-          "Window dimensions must be finite and positive.");
-    }
+  if (!std::isfinite(options.window_size) || options.window_size <= 0) {
+    throw std::invalid_argument("Window size must be finite and positive.");
   }
-  for (const double ratio : {options.step_x, options.step_y}) {
-    if (!std::isfinite(ratio) || ratio <= 0 || ratio > 1) {
-      throw std::invalid_argument(
-          "Window step ratios must satisfy 0 < ratio <= 1.");
-    }
+  if (options.resolution < 1) {
+    throw std::invalid_argument("Resolution must be a positive integer.");
   }
   if (!std::isfinite(options.min_density) || !std::isfinite(options.max_density)
       || options.min_density < 0 || options.max_density > 1
@@ -496,12 +490,16 @@ void LPFill::fill(const LPFillOptions& options)
   }
   auto* block = db_->getChip()->getBlock();
   const int dbu = db_->getTech()->getDbUnitsPerMicron();
-  const FillGrid grid(
-      block->getCoreArea(),
-      odb::Point(toDbu(options.window_width, dbu),
-                 toDbu(options.window_height, dbu)),
-      odb::Point(toDbu(options.window_width * options.step_x, dbu),
-                 toDbu(options.window_height * options.step_y, dbu)));
+  const int window_size = toDbu(options.window_size, dbu);
+  if (window_size % options.resolution != 0) {
+    throw std::invalid_argument(
+        "Window size in DBU must be divisible by resolution; choose a window "
+        "size or resolution that gives an integer tile size in DBU.");
+  }
+  const int tile_size = window_size / options.resolution;
+  const FillGrid grid(block->getCoreArea(),
+                      odb::Point(window_size, window_size),
+                      odb::Point(tile_size, tile_size));
   const auto layers
       = loadFillRules(options.rules_file.c_str(), db_->getTech(), logger_);
   if (options.solver == "glop" && options.solver_threads != 1) {

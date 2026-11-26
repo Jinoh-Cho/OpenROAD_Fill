@@ -101,6 +101,7 @@ filegroup(
     name = "doc_files",
     srcs = [
         "README.md",
+        "Window and Tile Definitions.png",
         "src/finale.tcl",
     ],
     visibility = ["//openroad/fin/test:__pkg__"],

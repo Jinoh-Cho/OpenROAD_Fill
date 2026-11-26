@@ -39,8 +39,8 @@ particularly their LP formulations and layout density control objectives.
 lp_fill
     -rules rules_file
     -objective min_var|min_fill
-    -window_size {width height}
-    -window_step {x_ratio y_ratio}
+    -window_size size
+    -resolution tiles_per_side
     [-solver glop|pdlp]
     [-solver_threads threads]
     [-num_threads threads]
@@ -56,8 +56,8 @@ lp_fill
 | ----- | ----- |
 | `-rules` | Required. Specify JSON fill rule file. LP fill currently supports non-OPC rules only. |
 | `-objective` | Required. `min_var` maximizes the minimum window density [1], rather than minimizing statistical variance; `min_fill` minimizes total fill area [2].|
-| `-window_size` | Required. window width and height for density check, in microns.|
-| `-window_step` | Required. Horizontal and vertical step ratios relative to window width and height, respectively. Each ratio is in `(0, 1]`; `0.25` means 25% of the corresponding window dimension. |
+| `-window_size` | Required. Side length `w` of the square density window, in microns. Must be finite and positive. |
+| `-resolution` | Required. Positive integer `r`: number of tiles along each side of a window. Both the tile side length and window step are `w / r`. |
 | `-solver` | Optional. `glop` (default) or `pdlp`, both open-source OR-Tools LP solvers. |
 | `-solver_threads` | Optional. Number of CPU threads used by the LP solver (Only for PDLP). |
 | `-num_threads` | Optional. Number of CPU threads used for fill processing outside the LP solver.|
@@ -67,13 +67,22 @@ lp_fill
 | `-max_tile_density` | Optional. Maximum post-fill tile density, from `0` to `1` and at least the tile minimum; default `1`.|
 
 
-For example, `-window_size {50 30} -window_step {0.25 0.5}` uses actual steps
-of `12.5` microns horizontally and `15` microns vertically. Step ratios are
-converted to distances and rounded to database units before constructing the
-tile/window grid.
+For example, `-window_size 100 -resolution 4` uses 100 × 100 µm windows,
+25 × 25 µm tiles, and a 25 µm window step in both directions. Each window
+contains exactly 4 × 4 = 16 tiles.
 
-The window dimensions and window step ratios determine the tile partition used in the LP formulation. 
-For example, a 50 × 50 µm window with step ratios of 0.25 × 0.25 produces 12.5 × 12.5 µm tiles.
+![Window and tile definitions showing a window of side w, tiles of side w/r, and a window step of w/r.](Window%20and%20Tile%20Definitions.png)
+
+The solid outline shows window `k`; the dashed outline shows the next window,
+shifted by one tile (`w/r`). Here, `w` is `-window_size` and `r` is `-resolution`.
+
+In general, a window has size `w × w`, a tile has size `(w/r) × (w/r)`,
+and the window moves by `w/r` in each direction. Resolution is the number of
+tiles per side, not the total number of tiles in a window (`r × r`).
+The window size is rounded to database units (DBU) and must then be exactly
+divisible by `r`, so tile boundaries and window boundaries remain aligned.
+The core boundary may leave smaller tiles outside the complete windows.
+
 Each LP variable represents the fill area to be added to one tile.
 Without tile density bounds, fill may concentrate in certain tiles while still satisfying the window density constraints.
 Specifying minimum and maximum tile densities helps control this local concentration.

@@ -12,6 +12,7 @@ COMPULSORY_TESTS = [
 
 PASSFAIL_TESTS = [
     "density_fill_obstruction",
+    "lp_fill",
 ]
 
 ALL_TESTS = COMPULSORY_TESTS + PASSFAIL_TESTS
