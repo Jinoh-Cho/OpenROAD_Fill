@@ -4,6 +4,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "odb/db.h"
 #include "odb/geom.h"
@@ -26,6 +27,19 @@ struct LPFillOptions
   double max_tile_density = 1.0;
 };
 
+struct DiscreteDensityCheckOptions
+{
+  double window_size = 50.0;
+  int resolution = 4;
+  int num_threads = 1;
+  double min_density = 0.2;
+  double max_density = 0.7;
+  std::vector<std::string> layers;
+  bool has_area = false;
+  odb::Rect area;
+  std::string report;
+};
+
 class Finale
 {
  public:
@@ -34,6 +48,8 @@ class Finale
   void densityFill(const char* rules_filename, const odb::Rect& fill_area);
 
   void lpFill(const LPFillOptions& options);
+
+  void discreteDensityCheck(const DiscreteDensityCheckOptions& options);
 
   void setDebug();
 

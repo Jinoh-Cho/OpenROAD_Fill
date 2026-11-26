@@ -8,6 +8,9 @@
 %}
 
 %include "../../Exception.i"
+%include <std_string.i>
+%include <std_vector.i>
+%template(FinLayerNames) std::vector<std::string>;
 
 %inline %{
 
@@ -52,6 +55,30 @@ lp_fill_cmd(const char* rules_filename,
   options.min_tile_density = min_tile_density;
   options.max_tile_density = max_tile_density;
   ord::OpenRoad::openRoad()->getFinale()->lpFill(options);
+}
+
+void
+discrete_density_check_cmd(double window_size,
+                           int resolution,
+                           int num_threads,
+                           const std::vector<std::string>& layers,
+                           bool has_area,
+                           const odb::Rect& area,
+                           double min_density,
+                           double max_density,
+                           const char* report)
+{
+  fin::DiscreteDensityCheckOptions options;
+  options.window_size = window_size;
+  options.resolution = resolution;
+  options.num_threads = num_threads;
+  options.layers = layers;
+  options.has_area = has_area;
+  options.area = area;
+  options.min_density = min_density;
+  options.max_density = max_density;
+  options.report = report;
+  ord::OpenRoad::openRoad()->getFinale()->discreteDensityCheck(options);
 }
 
 %} // inline

@@ -126,7 +126,7 @@ Each tile has an LP variable representing the fill area to be added.
 Increasing `-resolution` creates more tiles, providing finer spatial control
 but increasing the LP size and potentially the solver runtime.
 
-For large LP problems, consider using `-solver pdlp` instead of GLOP and
+For large LP problems, consider using `-solver pdlp` instead of -solver glop` and
 increasing `-solver_threads` to enable parallel LP solving. To accelerate
 fill processing outside the LP solver, increase `-num_threads`. The benefit
 of additional threads depends on the design and available CPU resources.
@@ -134,6 +134,51 @@ of additional threads depends on the design and available CPU resources.
 Window density constraints apply to the combined density of multiple tiles
 and may allow fill to concentrate in individual tiles. Use `-min_tile_density`
 and `-max_tile_density` to control this local concentration.
+
+### Discrete density check
+
+Measure window densities in the loaded design without inserting or modifying
+fill. This command uses the same manufacturing-grid adjustment and discrete
+window grid as `lp_fill`. It checks the fixed window positions separated by
+one tile; it does not search for continuous/floating-window density extrema.
+
+```tcl
+discrete_density_check
+    -window_size size
+    -resolution tiles_per_side
+    [-layers layer_names]
+    [-area {lx ly ux uy}]
+    [-min_density density]
+    [-max_density density]
+    [-num_threads threads]
+    [-report filename]
+```
+
+#### Options
+
+| Switch Name | Description |
+| ----- | ----- |
+| `-window_size` | Required. Side length of the square density window, in microns. |
+| `-resolution` | Required. Positive integer number of tiles along each window side. |
+| `-layers` | Optional. List of routing layer names. Defaults to all routing layers; duplicate names are checked once. |
+| `-area` | Optional. Check area `{lx ly ux uy}`, in microns. Defaults to the core area. |
+| `-min_density` | Optional. Minimum window density from `0` to `1`; default `0.20`. |
+| `-max_density` | Optional. Maximum window density from `0` to `1`, at least the minimum; default `0.70`. |
+| `-num_threads` | Optional. Positive number of threads for tile metal-area calculation; default `1`. |
+| `-report` | Optional. JSON report filename, including each window's bounds, density, and violation flags. |
+
+Logs report the minimum, maximum, and mean window density and the numbers
+of windows below and above the limits for each selected layer. Violations
+are reported without terminating the command. Invalid options, unknown or
+non-routing layers, and report-writing failures produce errors. At least two
+window positions must fit along each axis, as required by `lp_fill`.
+
+The geometry calculation unions routed metal, via enclosures, instance pin/OBS
+geometry, block pins, and existing fills using the same collection as `lp_fill`.
+Fill obstructions are excluded. No fill rules file or LP solver is needed.
+The JSON report records the check area and window bounds in microns, the
+requested and effective window sizes, tile size, density limits, and per-layer
+summaries and window results.
 
 ## Example JSON
 

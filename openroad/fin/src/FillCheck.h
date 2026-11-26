@@ -6,10 +6,30 @@
 #include <cstddef>
 #include <vector>
 
+#include "fin/Finale.h"
 #include "odb/geom.h"
 #include "polygon.h"
 
 namespace fin {
+
+struct DensityGridConfig
+{
+  int window_size;
+  int tile_size;
+  int manufacturing_grid;
+};
+
+DensityGridConfig makeDensityGridConfig(odb::dbTech* tech,
+                                        const odb::Rect& area,
+                                        double window_size,
+                                        int resolution,
+                                        const char* command,
+                                        const char* area_name,
+                                        utl::Logger* logger);
+Polygon90Set collectLayerMetal(odb::dbBlock* block, odb::dbTechLayer* layer);
+void checkDiscreteDensity(odb::dbDatabase* db,
+                          utl::Logger* logger,
+                          const DiscreteDensityCheckOptions& options);
 
 struct FillWindow
 {

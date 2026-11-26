@@ -77,3 +77,46 @@ proc lp_fill { args } {
     $keys(-min_density) $keys(-max_density) \
     $keys(-min_tile_density) $keys(-max_tile_density)
 }
+
+sta::define_cmd_args "discrete_density_check" {
+  -window_size size
+  -resolution tiles_per_side
+  [-layers layer_names]
+  [-area {lx ly ux uy}]
+  [-min_density density]
+  [-max_density density]
+  [-num_threads threads]
+  [-report filename]
+}
+
+proc discrete_density_check { args } {
+  sta::parse_key_args "discrete_density_check" args \
+    keys {-window_size -resolution -layers -area -min_density -max_density
+      -num_threads -report} flags {}
+  sta::check_argc_eq0 "discrete_density_check" $args
+  foreach key {-window_size -resolution} {
+    if { ![info exists keys($key)] } {
+      utl::error FIN 25 "The $key argument must be specified."
+    }
+  }
+  foreach {key value} {
+    -layers {} -min_density 0.20 -max_density 0.70 -num_threads 1 -report {}
+  } {
+    if { ![info exists keys($key)] } {
+      set keys($key) $value
+    }
+  }
+  set has_area [info exists keys(-area)]
+  set area [odb::Rect]
+  if { $has_area } {
+    if { [llength $keys(-area)] != 4 } {
+      utl::error FIN 31 "The -area argument must be a list of 4 coordinates in microns."
+    }
+    lassign $keys(-area) lx ly ux uy
+    $area init [ord::microns_to_dbu $lx] [ord::microns_to_dbu $ly] \
+      [ord::microns_to_dbu $ux] [ord::microns_to_dbu $uy]
+  }
+  fin::discrete_density_check_cmd $keys(-window_size) $keys(-resolution) \
+    $keys(-num_threads) $keys(-layers) $has_area $area \
+    $keys(-min_density) $keys(-max_density) $keys(-report)
+}

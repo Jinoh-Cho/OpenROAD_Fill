@@ -45,6 +45,7 @@ cc_library(
         "//openroad/odb/src/db",
         "//openroad/utl",
         "//openroad/web:core",
+        "@boost.json",
         "@boost.lexical_cast",
         "@boost.polygon",
         "@boost.property_tree",
@@ -131,6 +132,8 @@ cc_test(
     deps = [
         ":fin",
         "//openroad/odb/src/db",
+        "//openroad/utl",
+        "@boost.json",
         "@boost.polygon",
         "@googletest//:gtest",
         "@googletest//:gtest_main",

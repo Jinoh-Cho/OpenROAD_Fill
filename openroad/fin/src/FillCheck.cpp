@@ -4,14 +4,18 @@
 #include "FillCheck.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <fstream>
 #include <limits>
 #include <numeric>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "FillCommon.h"
+#include "boost/json.hpp"
 
 namespace fin {
 namespace {
@@ -181,4 +185,284 @@ FillDensitySummary summarizeFillDensity(const std::vector<double>& densities,
   }
   return summary;
 }
+namespace {
+void checkWindowPositions(const odb::Rect& area,
+                          const DensityGridConfig& config,
+                          const double requested_window_size,
+                          const int dbu,
+                          const char* command,
+                          const char* area_name,
+                          utl::Logger* logger)
+{
+  const int64_t width = int64_t{area.xMax()} - area.xMin();
+  const int64_t height = int64_t{area.yMax()} - area.yMin();
+  const auto count = [&](const int64_t length) -> int64_t {
+    return length < config.window_size
+               ? 0
+               : (length - config.window_size) / config.tile_size + 1;
+  };
+  const int64_t positions_x = count(width);
+  const int64_t positions_y = count(height);
+  if (positions_x < 2 || positions_y < 2) {
+    const double width_um = static_cast<double>(width) / dbu;
+    const double height_um = static_cast<double>(height) / dbu;
+    const double window_um = static_cast<double>(config.window_size) / dbu;
+    logger->error(utl::FIN,
+                  24,
+                  "{} requires at least two window positions in both X "
+                  "and Y. Requested window size: {:.12g} um; effective window "
+                  "size: {:.12g} x {:.12g} um; {} size: {:.12g} x {:.12g} um "
+                  "(area {:.12g} um^2); window positions: X={}, Y={}. "
+                  "Reduce -window_size.",
+                  command,
+                  requested_window_size,
+                  window_um,
+                  window_um,
+                  area_name,
+                  width_um,
+                  height_um,
+                  width_um * height_um,
+                  positions_x,
+                  positions_y);
+  }
+}
+}
+
+DensityGridConfig makeDensityGridConfig(odb::dbTech* tech,
+                                        const odb::Rect& area,
+                                        const double window_size,
+                                        const int resolution,
+                                        const char* command,
+                                        const char* area_name,
+                                        utl::Logger* logger)
+{
+  if (!std::isfinite(window_size) || window_size <= 0) {
+    throw std::invalid_argument("Window size must be finite and positive.");
+  }
+  if (resolution < 1) {
+    throw std::invalid_argument("Resolution must be a positive integer.");
+  }
+  if (area.xMin() >= area.xMax() || area.yMin() >= area.yMax()) {
+    throw std::invalid_argument(
+        "Density check area must have positive width and height.");
+  }
+  const int dbu = tech->getDbUnitsPerMicron();
+  const double requested = std::round(window_size * dbu);
+  if (!std::isfinite(requested) || requested < 1
+      || requested > std::numeric_limits<int>::max()) {
+    throw std::invalid_argument(
+        "Window size must be positive and representable in DBU.");
+  }
+  const int requested_dbu = static_cast<int>(requested);
+  const int manufacturing_grid = std::max(tech->getManufacturingGrid(), 1);
+  const int64_t quantum = int64_t{resolution} * manufacturing_grid;
+  const int tile_size
+      = static_cast<int>((requested_dbu / quantum) * manufacturing_grid);
+  if (tile_size == 0) {
+    throw std::invalid_argument(
+        "Resolution is too high for the window size on the manufacturing grid; "
+        "tiles must be at least one manufacturing grid unit wide.");
+  }
+  const DensityGridConfig config{
+      tile_size * resolution, tile_size, manufacturing_grid};
+  if (config.window_size != requested_dbu) {
+    logger->warn(utl::FIN,
+                 18,
+                 "Adjusted window size from {:.12g} um ({} DBU) to {:.12g} "
+                 "um ({} DBU) for resolution {} and manufacturing grid {} "
+                 "DBU; tile size and window step are {:.12g} um ({} DBU).",
+                 window_size,
+                 requested_dbu,
+                 static_cast<double>(config.window_size) / dbu,
+                 config.window_size,
+                 resolution,
+                 manufacturing_grid,
+                 static_cast<double>(tile_size) / dbu,
+                 tile_size);
+  }
+  checkWindowPositions(
+      area, config, window_size, dbu, command, area_name, logger);
+  return config;
+}
+
+Polygon90Set collectLayerMetal(odb::dbBlock* block, odb::dbTechLayer* layer)
+{
+  Polygon90Set metal = collectNonFillShapes(block, layer, false);
+  for (auto* fill : block->getFills()) {
+    if (fill->getTechLayer() == layer) {
+      odb::Rect rect;
+      fill->getRect(rect);
+      metal.insert(
+          makeRect(rect.xMin(), rect.yMin(), rect.xMax(), rect.yMax()));
+    }
+  }
+  for (auto* term : block->getBTerms()) {
+    for (auto* pin : term->getBPins()) {
+      for (auto* box : pin->getBoxes()) {
+        if (box->getTechLayer() == layer) {
+          metal.insert(
+              makeRect(box->xMin(), box->yMin(), box->xMax(), box->yMax()));
+        }
+      }
+    }
+  }
+  return metal;
+}
+
+namespace {
+std::vector<odb::dbTechLayer*> densityLayers(
+    odb::dbTech* tech,
+    const std::vector<std::string>& names,
+    utl::Logger* logger)
+{
+  std::vector<odb::dbTechLayer*> layers;
+  if (names.empty()) {
+    for (auto* layer : tech->getLayers()) {
+      if (layer->getType() == odb::dbTechLayerType::ROUTING) {
+        layers.push_back(layer);
+      }
+    }
+  } else {
+    for (const auto& name : names) {
+      auto* layer = tech->findLayer(name.c_str());
+      if (layer == nullptr
+          || layer->getType() != odb::dbTechLayerType::ROUTING) {
+        logger->error(utl::FIN,
+                      27,
+                      "Layer '{}' must name an existing routing layer.",
+                      name);
+      }
+      if (std::find(layers.begin(), layers.end(), layer) == layers.end()) {
+        layers.push_back(layer);
+      }
+    }
+  }
+  if (layers.empty()) {
+    throw std::invalid_argument(
+        "No routing layers are available for density checking.");
+  }
+  return layers;
+}
+
+boost::json::array boundsInMicrons(const odb::Rect& bounds, const double dbu)
+{
+  return {bounds.xMin() / dbu,
+          bounds.yMin() / dbu,
+          bounds.xMax() / dbu,
+          bounds.yMax() / dbu};
+}
+
+boost::json::object layerDensityReport(
+    const char* name,
+    const FillGrid& grid,
+    const std::vector<double>& densities,
+    const FillDensitySummary& summary,
+    const DiscreteDensityCheckOptions& options,
+    const double dbu)
+{
+  boost::json::array windows;
+  windows.reserve(densities.size());
+  for (size_t i = 0; i < densities.size(); ++i) {
+    windows.push_back(boost::json::object{
+        {"bounds_um", boundsInMicrons(grid.windows()[i].bounds, dbu)},
+        {"density", densities[i]},
+        {"below_minimum", densities[i] < options.min_density},
+        {"above_maximum", densities[i] > options.max_density}});
+  }
+  return {{"name", name},
+          {"window_count", densities.size()},
+          {"min_density", summary.minimum},
+          {"max_density", summary.maximum},
+          {"mean_density", summary.mean},
+          {"below_minimum", summary.below_minimum},
+          {"above_maximum", summary.above_maximum},
+          {"windows", std::move(windows)}};
+}
+}
+
+void checkDiscreteDensity(odb::dbDatabase* db,
+                          utl::Logger* logger,
+                          const DiscreteDensityCheckOptions& options)
+{
+  if (options.num_threads < 1) {
+    throw std::invalid_argument("Density check thread count must be positive.");
+  }
+  if (!std::isfinite(options.min_density) || !std::isfinite(options.max_density)
+      || options.min_density < 0 || options.max_density > 1
+      || options.min_density > options.max_density) {
+    throw std::invalid_argument(
+        "Density bounds must satisfy 0 <= min_density <= max_density <= 1.");
+  }
+  if (db->getTech() == nullptr || db->getChip() == nullptr
+      || db->getChip()->getBlock() == nullptr) {
+    logger->error(
+        utl::FIN, 26, "discrete_density_check requires a loaded design.");
+  }
+  auto* block = db->getChip()->getBlock();
+  const auto area = options.has_area ? options.area : block->getCoreArea();
+  const auto config
+      = makeDensityGridConfig(db->getTech(),
+                              area,
+                              options.window_size,
+                              options.resolution,
+                              "discrete_density_check",
+                              options.has_area ? "check area" : "core",
+                              logger);
+  const FillGrid grid(area,
+                      odb::Point(config.window_size, config.window_size),
+                      odb::Point(config.tile_size, config.tile_size));
+  const auto layers = densityLayers(db->getTech(), options.layers, logger);
+  std::ofstream output;
+  if (!options.report.empty()) {
+    output.open(options.report);
+    if (!output) {
+      logger->error(
+          utl::FIN, 29, "Cannot open density report '{}'.", options.report);
+    }
+  }
+  const double dbu = db->getTech()->getDbUnitsPerMicron();
+  boost::json::object report{{"schema_version", 1},
+                             {"area_um", boundsInMicrons(area, dbu)},
+                             {"requested_window_size_um", options.window_size},
+                             {"window_size_um", config.window_size / dbu},
+                             {"tile_size_um", config.tile_size / dbu},
+                             {"resolution", options.resolution},
+                             {"min_density_limit", options.min_density},
+                             {"max_density_limit", options.max_density},
+                             {"layers", boost::json::array{}}};
+  for (auto* layer : layers) {
+    auto metal = collectLayerMetal(block, layer);
+    std::vector<Rectangle> rectangles;
+    metal.get_rectangles(rectangles);
+    const auto densities = grid.windowDensities(
+        grid.metalAreas(rectangles, options.num_threads));
+    const auto summary = summarizeFillDensity(
+        densities, options.min_density, options.max_density);
+    logger->info(
+        utl::FIN,
+        28,
+        "Discrete density: layer={}, windows={}, min={:.6f}, max={:.6f}, "
+        "mean={:.6f}, below_minimum={}, above_maximum={}.",
+        layer->getConstName(),
+        densities.size(),
+        summary.minimum,
+        summary.maximum,
+        summary.mean,
+        summary.below_minimum,
+        summary.above_maximum);
+    if (!options.report.empty()) {
+      report.at("layers").as_array().push_back(layerDensityReport(
+          layer->getConstName(), grid, densities, summary, options, dbu));
+    }
+  }
+  if (!options.report.empty()) {
+    output << boost::json::serialize(report) << '\n';
+    output.close();
+    if (!output) {
+      logger->error(
+          utl::FIN, 30, "Failed to write density report '{}'.", options.report);
+    }
+  }
+}
+
 }

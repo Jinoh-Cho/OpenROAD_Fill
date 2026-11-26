@@ -9,4 +9,6 @@
 
 %include "../../Exception-py.i"
 %include "std_string.i"
+%include "std_vector.i"
+%template(FinLayerNames) std::vector<std::string>;
 %include "fin/Finale.h"

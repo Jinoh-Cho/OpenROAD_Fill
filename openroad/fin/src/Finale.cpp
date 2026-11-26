@@ -4,6 +4,7 @@
 #include "fin/Finale.h"
 
 #include "DensityFill.h"
+#include "FillCheck.h"
 #include "LPFill.h"
 #include "odb/db.h"
 #include "odb/geom.h"
@@ -33,6 +34,11 @@ void Finale::lpFill(const LPFillOptions& options)
 {
   LPFill filler(db_, logger_);
   filler.fill(options);
+}
+
+void Finale::discreteDensityCheck(const DiscreteDensityCheckOptions& options)
+{
+  checkDiscreteDensity(db_, logger_, options);
 }
 
 }  // namespace fin
