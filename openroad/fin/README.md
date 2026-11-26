@@ -41,7 +41,7 @@ total amount of inserted fill (Min-Fill) [1, 2].
 Based on the LP solution, fill rectangles are placed to achieve the
 target window densities using the same JSON rule format as `density_fill`.
 
-The LP-based fill implementation was developed with reference to [1] and [2],
+The LP-based fill implementation was developed with reference to [\[1\]](https://vlsicad.ucsd.edu/Publications/Journals/j40.pdf) and [\[2\]](https://www.cs.virginia.edu/~robins/papers/dac2000_camera.pdf),
 particularly their LP formulations and layout density control objectives.
 
 In some cases, the resulting layout may not satisfy the user-specified
@@ -68,7 +68,7 @@ lp_fill
 | Switch Name | Description |
 | ----- | ----- |
 | `-rules` | Required. Specify JSON fill rule file. LP fill currently supports non-OPC rules only. |
-| `-objective` | Required. `min_var` maximizes the minimum window density [1], rather than minimizing statistical variance; `min_fill` minimizes total fill area [2].|
+| `-objective` | Required. `min_var` maximizes the minimum window density [\[1\]](https://vlsicad.ucsd.edu/Publications/Journals/j40.pdf), rather than minimizing statistical variance; `min_fill` minimizes total fill area [\[2\]](https://www.cs.virginia.edu/~robins/papers/dac2000_camera.pdf).|
 | `-window_size` | Required. Side length `w` of the square density window, in microns. Must be finite and positive. |
 | `-resolution` | Required. Positive integer `r`: number of tiles along each side of a window. Both the tile side length and window step are `w / r`. |
 | `-solver` | Optional. `glop` (default) or `pdlp`, both open-source OR-Tools LP solvers. |
@@ -230,12 +230,12 @@ POSTECH (Pohang University of Science and Technology), during his visiting gradu
 
 ## References
 
-[1] A. B. Kahng, G. Robins, A. Singh, and A. Zelikovsky,
+[\[1\]](https://vlsicad.ucsd.edu/Publications/Journals/j40.pdf) A. B. Kahng, G. Robins, A. Singh, and A. Zelikovsky,
 "[Filling Algorithms and Analyses for Layout Density Control](https://vlsicad.ucsd.edu/Publications/Journals/j40.pdf),"
 *IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems
 (TCAD)*, vol. 18, no. 4, pp. 445–462, 1999.
 
-[2] Y. Chen, A. B. Kahng, G. Robins, and A. Zelikovsky,
+[\[2\]](https://www.cs.virginia.edu/~robins/papers/dac2000_camera.pdf) Y. Chen, A. B. Kahng, G. Robins, and A. Zelikovsky,
 "[Practical Iterated Fill Synthesis for CMP Uniformity](https://www.cs.virginia.edu/~robins/papers/dac2000_camera.pdf),"
 in *Proceedings of the ACM/IEEE Design Automation Conference (DAC)*,
 pp. 671–674, 2000.
