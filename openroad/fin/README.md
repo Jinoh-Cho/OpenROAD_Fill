@@ -91,24 +91,33 @@ shifted by one tile (`w/r`). Here, `w` is `-window_size` and `r` is `-resolution
 
 In general, a window has size `w × w`, a tile has size `(w/r) × (w/r)`,
 and the window moves by `w/r` in each direction. Resolution is the number of
-tiles per side, not the total number of tiles in a window (`r × r`).
-The window size is first rounded to database units (DBU). The tile side length
-is then rounded down to a multiple of the technology LEF manufacturing grid,
-and the effective window size is set to `tile_size * r`. If the LEF does not
-specify a manufacturing grid, one DBU is used. A warning reports any resulting
-window adjustment, the manufacturing grid, and the tile size and step.
-For example, at 1,000 DBU/µm with a 0.005 µm manufacturing grid,
-`-window_size 50 -resolution 3` uses 16.665 µm tiles and steps and a
-49.995 µm window. The adjusted window size is used for both window geometry
-and density calculations. Each tile must be at least one manufacturing grid
-unit wide, and the adjusted window must fit inside the core.
-The core boundary may leave smaller tiles outside the complete windows.
-The tile grid is generated at the tile-size interval independently of window
-positions, preserving `r × r` tiles per window. At least two window positions
-must fit along each of X and Y. Otherwise, the command stops before creating
-any fill and reports the requested and effective window sizes, core dimensions
-and area, and window counts along both axes. Reduce `-window_size` to evaluate
-more positions.
+tiles per side, there by the total number of tiles in a window is (`r × r`).
+
+The tile size and window step are calculated as `window_size / resolution`
+and rounded down to a multiple of the manufacturing grid specified in the
+technology LEF. If no manufacturing grid is specified, one DBU is used.
+
+The effective window size is then adjusted to `tile_size * resolution`
+to ensure that each window contains exactly `r × r` tiles. If the window
+size is adjusted, a warning is issued.
+
+For example, with a manufacturing grid of 0.005 µm,
+`-window_size 50 -resolution 3` results in:
+
+- Tile size and window step: 16.665 µm
+- Effective window size: 49.995 µm
+
+The following conditions must be satisfied:
+
+- The tile size must be at least one manufacturing grid unit.
+- The effective window size must fit within the core.
+- At least two window positions must fit along each axis (X and Y).
+
+If these conditions are not met, the command terminates without inserting
+fill. Reduce the window size if an insufficient number of window positions
+is available.
+
+Tiles at the core boundary may be smaller than the regular tile size.
 
 #### Configuration considerations
 
